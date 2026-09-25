@@ -115,9 +115,39 @@ pub const FIELDS: [FieldSpec; 10] = [
 /// a guess into the data.
 const UNSET: &str = "—";
 
+/// The form is modal, like the editor the rest of these keys come from.
+/// It opens in Insert because you came here to type; Esc drops to Normal,
+/// where `ZZ` writes and `:` opens the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormMode {
+    Insert,
+    Normal,
+    Command,
+}
+
+/// What a key sequence asked the event loop to do. The form itself can't
+/// touch the database, so `to_entry` + these are how a `:w` reaches it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormAction {
+    None,
+    /// Write and close (`:w`, `:wq`, `:x`, `ZZ`).
+    Save,
+    /// Close, discarding edits (`:q!`, `ZQ`).
+    Discard,
+    /// `:q` — refuses if there are unsaved edits, the way `:q` does.
+    QuitIfClean,
+}
+
 pub struct Form {
     /// Parallel to FIELDS.
     values: [String; 10],
+    pub mode: FormMode,
+    /// The `:` line being typed, without its leading colon.
+    pub command: String,
+    /// First key of a two-key Normal-mode sequence (`gg`, `dd`, `ZZ`).
+    pending: Option<char>,
+    /// Set once any field is edited, so `:q` can refuse like vim's does.
+    pub dirty: bool,
     pub focus: usize,
     /// Set when editing an existing row; its URL is the identity to write
     /// back to, even if the URL box is later edited.
@@ -140,6 +170,10 @@ impl Form {
         values[index_of(FieldId::Status)] = UNSET.to_string();
         Self {
             values,
+            mode: FormMode::Insert,
+            command: String::new(),
+            pending: None,
+            dirty: false,
             focus: 0,
             editing: None,
             error: None,
@@ -175,6 +209,7 @@ impl Form {
         // than preserving tags for the frozen web board.
         form.set(FieldId::Description, &flatten_description(&row.description));
         form.editing = Some(row.url.clone());
+        form.dirty = false;
         form
     }
 
@@ -220,6 +255,7 @@ impl Form {
         }
         let i = self.focus;
         self.values[i].push(c);
+        self.dirty = true;
         self.error = None;
     }
 
@@ -244,6 +280,7 @@ impl Form {
             normalized.replace('\n', " ")
         };
         self.values[i].push_str(&cleaned);
+        self.dirty = true;
         self.error = None;
     }
 
@@ -253,6 +290,7 @@ impl Form {
         }
         let i = self.focus;
         self.values[i].pop();
+        self.dirty = true;
         self.error = None;
     }
 
@@ -260,8 +298,143 @@ impl Form {
         if self.focused().kind == FieldKind::Multiline {
             let i = self.focus;
             self.values[i].push('\n');
+            self.dirty = true;
         } else {
             self.next_field();
+        }
+    }
+
+    pub fn first_field(&mut self) {
+        self.focus = 0;
+        self.desc_scroll = 0;
+    }
+
+    pub fn last_field(&mut self) {
+        self.focus = FIELDS.len() - 1;
+        self.desc_scroll = 0;
+    }
+
+    /// `dd` — clear the focused field.
+    pub fn clear_field(&mut self) {
+        let i = self.focus;
+        if self.focused().kind == FieldKind::Choice {
+            self.values[i] = UNSET.to_string();
+        } else {
+            self.values[i].clear();
+        }
+        self.dirty = true;
+        self.error = None;
+    }
+
+    pub fn enter_insert(&mut self) {
+        // A choice field has nothing to type into; `i` there is almost
+        // certainly a mis-key, so stay put rather than trapping the user
+        // in an insert mode where no key does anything.
+        if self.focused().kind != FieldKind::Choice {
+            self.mode = FormMode::Insert;
+        }
+    }
+
+    pub fn enter_normal(&mut self) {
+        self.mode = FormMode::Normal;
+        self.pending = None;
+        self.command.clear();
+    }
+
+    // -------------------------------------------------------- Normal mode
+
+    /// Handle one Normal-mode key, returning what the caller should do.
+    pub fn normal_key(&mut self, c: char) -> FormAction {
+        // Two-key sequences first: gg, dd, ZZ, ZQ.
+        if let Some(first) = self.pending.take() {
+            return match (first, c) {
+                ('g', 'g') => {
+                    self.first_field();
+                    FormAction::None
+                }
+                ('d', 'd') => {
+                    self.clear_field();
+                    FormAction::None
+                }
+                ('Z', 'Z') => FormAction::Save,
+                ('Z', 'Q') => FormAction::Discard,
+                // An unrecognized pair is dropped rather than replayed —
+                // same as vim, where `dx` does nothing surprising.
+                _ => FormAction::None,
+            };
+        }
+
+        match c {
+            'g' | 'd' | 'Z' => {
+                self.pending = Some(c);
+                FormAction::None
+            }
+            'j' => {
+                self.next_field();
+                FormAction::None
+            }
+            'k' => {
+                self.prev_field();
+                FormAction::None
+            }
+            'G' => {
+                self.last_field();
+                FormAction::None
+            }
+            'i' | 'a' | 'A' => {
+                self.enter_insert();
+                FormAction::None
+            }
+            // h/l cycle a choice, matching left/right everywhere else.
+            'h' => {
+                self.cycle(-1);
+                FormAction::None
+            }
+            'l' | ' ' => {
+                self.cycle(1);
+                FormAction::None
+            }
+            'x' => {
+                self.backspace();
+                FormAction::None
+            }
+            ':' => {
+                self.mode = FormMode::Command;
+                self.command.clear();
+                FormAction::None
+            }
+            _ => FormAction::None,
+        }
+    }
+
+    // ------------------------------------------------------- Command line
+
+    pub fn command_push(&mut self, c: char) {
+        self.command.push(c);
+    }
+
+    pub fn command_backspace(&mut self) -> FormAction {
+        if self.command.pop().is_none() {
+            // Backspacing past the colon leaves the command line, the way
+            // it does in vim.
+            self.enter_normal();
+        }
+        FormAction::None
+    }
+
+    /// Run the typed `:` command.
+    pub fn command_submit(&mut self) -> FormAction {
+        let cmd = self.command.trim().to_string();
+        self.command.clear();
+        self.mode = FormMode::Normal;
+        match cmd.as_str() {
+            "w" | "wq" | "x" | "wq!" | "x!" => FormAction::Save,
+            "q!" => FormAction::Discard,
+            "q" => FormAction::QuitIfClean,
+            other => {
+                self.error = Some(format!("Not a command: :{other}"));
+                FormAction::None
+            }
         }
     }
 
@@ -284,6 +457,7 @@ impl Form {
             .unwrap_or(0) as isize;
         let next = (current + delta).rem_euclid(options.len() as isize) as usize;
         self.values[i] = options[next].clone();
+        self.dirty = true;
     }
 
     pub fn scroll_description(&mut self, delta: i16) {
@@ -553,6 +727,153 @@ mod tests {
         let mut f = Form::from_row(&row);
         f.set(FieldId::Notes, "");
         assert_eq!(f.to_entry().unwrap().notes, Some(String::new()));
+    }
+
+    #[test]
+    fn opens_in_insert_and_esc_drops_to_normal() {
+        let mut f = Form::new();
+        assert_eq!(f.mode, FormMode::Insert);
+        f.enter_normal();
+        assert_eq!(f.mode, FormMode::Normal);
+        f.normal_key('i');
+        assert_eq!(f.mode, FormMode::Insert);
+    }
+
+    #[test]
+    fn zz_writes_and_zq_discards() {
+        let mut f = filled();
+        f.enter_normal();
+        assert_eq!(f.normal_key('Z'), FormAction::None, "first key just arms");
+        assert_eq!(f.normal_key('Z'), FormAction::Save);
+        assert_eq!(f.normal_key('Z'), FormAction::None);
+        assert_eq!(f.normal_key('Q'), FormAction::Discard);
+    }
+
+    #[test]
+    fn an_unrecognized_two_key_sequence_does_nothing() {
+        let mut f = filled();
+        f.enter_normal();
+        f.normal_key('Z');
+        // `Zx` is not a command; it must not fall through to `x`'s
+        // meaning and silently delete a character.
+        assert_eq!(f.normal_key('x'), FormAction::None);
+        assert_eq!(f.get(FieldId::Company), "Acme Corp");
+    }
+
+    #[test]
+    fn colon_commands_map_to_the_right_actions() {
+        let mut f = filled();
+        for (cmd, expected) in [
+            ("w", FormAction::Save),
+            ("wq", FormAction::Save),
+            ("x", FormAction::Save),
+            ("q!", FormAction::Discard),
+            ("q", FormAction::QuitIfClean),
+        ] {
+            f.enter_normal();
+            f.normal_key(':');
+            assert_eq!(f.mode, FormMode::Command);
+            for c in cmd.chars() {
+                f.command_push(c);
+            }
+            assert_eq!(f.command_submit(), expected, "for :{cmd}");
+            assert_eq!(f.mode, FormMode::Normal);
+        }
+    }
+
+    #[test]
+    fn an_unknown_colon_command_reports_rather_than_acting() {
+        let mut f = filled();
+        f.enter_normal();
+        f.normal_key(':');
+        for c in "wat".chars() {
+            f.command_push(c);
+        }
+        assert_eq!(f.command_submit(), FormAction::None);
+        assert!(f.error.unwrap().contains("Not a command: :wat"));
+    }
+
+    #[test]
+    fn backspacing_past_the_colon_leaves_the_command_line() {
+        let mut f = filled();
+        f.enter_normal();
+        f.normal_key(':');
+        f.command_push('w');
+        f.command_backspace();
+        assert_eq!(f.mode, FormMode::Command, "still editing an empty command");
+        f.command_backspace();
+        assert_eq!(f.mode, FormMode::Normal, "empty backspace exits");
+    }
+
+    #[test]
+    fn dirty_tracks_real_edits_only() {
+        let mut f = Form::new();
+        assert!(!f.dirty);
+        f.enter_normal();
+        f.normal_key('j'); // navigation isn't an edit
+        assert!(!f.dirty);
+        f.normal_key('i');
+        f.insert_char('x');
+        assert!(f.dirty);
+
+        // Pre-filling from an existing row is not an edit either.
+        let row = crate::model::JobRow {
+            url: "manual:a/b".into(),
+            company: "A".into(),
+            title: "B".into(),
+            ..Default::default()
+        };
+        assert!(!Form::from_row(&row).dirty);
+    }
+
+    #[test]
+    fn dd_clears_a_field_and_resets_a_choice_to_unset() {
+        let mut f = filled();
+        f.set(FieldId::Stage, "seed");
+        f.enter_normal();
+        f.normal_key('d');
+        f.normal_key('d');
+        assert_eq!(f.get(FieldId::Company), "", "focus was on company");
+
+        f.focus = index_of(FieldId::Stage);
+        f.normal_key('d');
+        f.normal_key('d');
+        assert_eq!(f.get(FieldId::Stage), UNSET);
+    }
+
+    #[test]
+    fn hl_cycles_a_choice_like_the_arrow_keys() {
+        let mut f = filled();
+        f.focus = index_of(FieldId::Stage);
+        f.enter_normal();
+        f.normal_key('l');
+        assert_eq!(f.get(FieldId::Stage), "pre-seed");
+        f.normal_key('h');
+        assert_eq!(f.get(FieldId::Stage), UNSET);
+    }
+
+    #[test]
+    fn gg_and_g_jump_to_the_first_and_last_field() {
+        let mut f = filled();
+        f.enter_normal();
+        f.normal_key('G');
+        assert_eq!(f.focus, FIELDS.len() - 1);
+        f.normal_key('g');
+        f.normal_key('g');
+        assert_eq!(f.focus, 0);
+    }
+
+    #[test]
+    fn insert_is_refused_on_a_choice_field() {
+        let mut f = filled();
+        f.focus = index_of(FieldId::Stage);
+        f.enter_normal();
+        f.normal_key('i');
+        assert_eq!(
+            f.mode,
+            FormMode::Normal,
+            "nothing to type into a choice field"
+        );
     }
 
     #[test]

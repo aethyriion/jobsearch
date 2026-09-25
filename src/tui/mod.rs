@@ -289,6 +289,11 @@ fn handle_key(
     }
 
     let scroll_step: i16 = 10;
+    // Any key that isn't the second half of `dd` cancels the pending
+    // sequence, so a stray `d` can't silently arm a later delete.
+    if !matches!(key.code, KeyCode::Char('d')) {
+        app.pending_key = None;
+    }
     match key.code {
         KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -346,15 +351,19 @@ fn handle_key(
             }
         }
 
-        KeyCode::Char('a') => app.open_add_form(),
-        KeyCode::Char('E') => app.open_edit_form(),
-        KeyCode::Char('D') => {
-            if app.selected_row().is_some_and(|r| r.is_manual()) {
-                app.mode = Mode::ConfirmDelete;
+        KeyCode::Char('a') | KeyCode::Char('i') => app.open_add_form(),
+        KeyCode::Char('c') | KeyCode::Char('E') => app.open_edit_form(),
+        // `dd` to delete, the way it deletes a line everywhere else. `D`
+        // stays as a single-key alias.
+        KeyCode::Char('d') => {
+            if app.pending_key == Some('d') {
+                app.pending_key = None;
+                app.request_delete();
             } else {
-                app.status = "only hand-entered rows can be deleted".into();
+                app.pending_key = Some('d');
             }
         }
+        KeyCode::Char('D') => app.request_delete(),
 
         KeyCode::F(5) => {
             app.reload(store)?;
@@ -508,43 +517,133 @@ fn spawn_evaluate(
 
 /// Keys inside the manual-entry form.
 ///
-/// Ctrl+S saves rather than Enter: Enter has to stay available as a
-/// newline in the description, and a form you can't put a blank line in is
-/// a form you can't paste a real job posting into.
+/// Modal, like the rest of this UI's vocabulary: Insert to type, Esc to
+/// Normal, `ZZ` or `:w` to write. Deliberately no Ctrl+S — a save key you
+/// have to be told about is a save key nobody finds, and `:w` is one this
+/// audience already knows.
 fn handle_form_key(app: &mut App, store: &Store, key: KeyEvent) -> Result<()> {
-    use crate::tui::form::FieldKind;
-
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    match key.code {
-        KeyCode::Char('s') if ctrl => {
-            app.save_form(store)?;
-            return Ok(());
-        }
-        KeyCode::Esc => {
-            app.cancel_form();
-            return Ok(());
-        }
-        _ => {}
-    }
+    use crate::tui::form::{FieldKind, FormAction, FormMode};
 
     let Some(form) = &mut app.form else {
         return Ok(());
     };
-    let kind = form.focused().kind;
-    match key.code {
-        KeyCode::Tab | KeyCode::Down => form.next_field(),
-        KeyCode::BackTab | KeyCode::Up => form.prev_field(),
-        KeyCode::Enter => form.newline(),
-        KeyCode::Backspace => form.backspace(),
-        KeyCode::Left if kind == FieldKind::Choice => form.cycle(-1),
-        KeyCode::Right if kind == FieldKind::Choice => form.cycle(1),
-        KeyCode::PageDown if kind == FieldKind::Multiline => form.scroll_description(5),
-        KeyCode::PageUp if kind == FieldKind::Multiline => form.scroll_description(-5),
-        // Space cycles a choice too — it's what the hands reach for, and
-        // it can't mean anything else on a field that ignores typing.
-        KeyCode::Char(' ') if kind == FieldKind::Choice => form.cycle(1),
-        KeyCode::Char(c) if !ctrl => form.insert_char(c),
-        _ => {}
+
+    let action = match form.mode {
+        // ---------------------------------------------------- command line
+        FormMode::Command => match key.code {
+            KeyCode::Esc => {
+                form.enter_normal();
+                FormAction::None
+            }
+            KeyCode::Enter => form.command_submit(),
+            KeyCode::Backspace => form.command_backspace(),
+            KeyCode::Char(c) => {
+                form.command_push(c);
+                FormAction::None
+            }
+            _ => FormAction::None,
+        },
+
+        // --------------------------------------------------------- normal
+        FormMode::Normal => match key.code {
+            KeyCode::Char(c) => form.normal_key(c),
+            KeyCode::Tab | KeyCode::Down => {
+                form.next_field();
+                FormAction::None
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                form.prev_field();
+                FormAction::None
+            }
+            KeyCode::Left => {
+                form.cycle(-1);
+                FormAction::None
+            }
+            KeyCode::Right => {
+                form.cycle(1);
+                FormAction::None
+            }
+            KeyCode::Enter => {
+                form.enter_insert();
+                FormAction::None
+            }
+            // Esc in Normal is a no-op rather than a cancel: losing a
+            // half-typed application to one stray keypress would be a bad
+            // trade for saving a `:q!`.
+            _ => FormAction::None,
+        },
+
+        // --------------------------------------------------------- insert
+        FormMode::Insert => {
+            let kind = form.focused().kind;
+            match key.code {
+                KeyCode::Esc => {
+                    form.enter_normal();
+                    FormAction::None
+                }
+                KeyCode::Tab | KeyCode::Down => {
+                    form.next_field();
+                    FormAction::None
+                }
+                KeyCode::BackTab | KeyCode::Up => {
+                    form.prev_field();
+                    FormAction::None
+                }
+                KeyCode::Enter => {
+                    form.newline();
+                    FormAction::None
+                }
+                KeyCode::Backspace => {
+                    form.backspace();
+                    FormAction::None
+                }
+                KeyCode::Left if kind == FieldKind::Choice => {
+                    form.cycle(-1);
+                    FormAction::None
+                }
+                KeyCode::Right if kind == FieldKind::Choice => {
+                    form.cycle(1);
+                    FormAction::None
+                }
+                KeyCode::PageDown if kind == FieldKind::Multiline => {
+                    form.scroll_description(5);
+                    FormAction::None
+                }
+                KeyCode::PageUp if kind == FieldKind::Multiline => {
+                    form.scroll_description(-5);
+                    FormAction::None
+                }
+                KeyCode::Char(' ') if kind == FieldKind::Choice => {
+                    form.cycle(1);
+                    FormAction::None
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    form.insert_char(c);
+                    FormAction::None
+                }
+                _ => FormAction::None,
+            }
+        }
+    };
+
+    match action {
+        FormAction::None => {}
+        FormAction::Save => {
+            app.save_form(store)?;
+        }
+        FormAction::Discard => app.cancel_form(),
+        FormAction::QuitIfClean => {
+            let dirty = app.form.as_ref().is_some_and(|f| f.dirty);
+            if dirty {
+                if let Some(form) = &mut app.form {
+                    form.error = Some(
+                        "No write since last change (add ! to override, or :w to save)".into(),
+                    );
+                }
+            } else {
+                app.cancel_form();
+            }
+        }
     }
     Ok(())
 }

@@ -150,6 +150,10 @@ stage, headcount, your status and your notes. Paste the job description
 straight in — bracketed paste is on, so a multi-KB JD lands as one event
 rather than as a thousand keystrokes.
 
+The form is modal, like the rest of the UI. It opens in **insert** —
+you came here to type — and `Esc` drops to **normal**, where `ZZ` or `:w`
+writes it:
+
 ```
  Company     Northwind Systems
  Title       Staff Platform Engineer
@@ -159,8 +163,24 @@ rather than as a thousand keystrokes.
  ┌ Description — paste the JD here ──────────────────┐
  │ We are hiring a Staff Platform Engineer to own... │
  └───────────────────────────────────────────────────┘
- tab/↑↓ field · ←/→ cycle · enter newline · ^S save · esc cancel
+ -- NORMAL --  j/k field · i insert · h/l cycle · dd clear · ZZ or :w WRITE · ZQ discard
 ```
+
+| | |
+|---|---|
+| `j` / `k`, `Tab` | move between fields |
+| `gg` / `G` | first / last field |
+| `i`, `a` | insert on this field |
+| `Esc` | back to normal |
+| `h` / `l` | cycle a choice field (stage, status) |
+| `dd` | clear the field |
+| `x` | delete a character |
+| `ZZ`, `:w`, `:wq`, `:x` | write and close |
+| `ZQ`, `:q!` | discard |
+| `:q` | close, refusing if there are unsaved edits |
+
+`Esc` in normal mode does nothing on purpose — losing a half-typed
+application to one stray keypress is a worse trade than typing `:q!`.
 
 Hand-entered rows are marked `+` in the list and behave like any other
 job: they sort and filter alongside fetched ones, and `jobsearch evaluate`
@@ -185,9 +205,10 @@ fetched description.
 Leave the URL blank and you get a stable `manual:company/title` one, so
 re-entering the same role updates it rather than piling up near-duplicates.
 
-`E` edits any row (including fetched ones — useful for fixing a mangled
-title or adding a stage). `D` deletes, but only hand-entered rows: deleting
-a fetched one would just invite it back on the next run.
+`c` (or `E`) edits any row, including fetched ones — useful for fixing a
+mangled title or adding a stage. `dd` (or `D`) deletes, but only
+hand-entered rows: deleting a fetched one would just invite it back on the
+next run.
 
 From a script:
 
@@ -198,6 +219,26 @@ jobsearch add --company "Northwind Systems" \
               --status applied --notes "referred by Dana" \
               --description-file jd.txt      # or `-` for stdin
 ```
+
+## Tracking where each application stands
+
+`m` cycles the status filter: **all → tracked → untouched → applied →
+interview → rejected → skipped → silence**. `tracked` is the application
+list — everything you've acted on, whatever happened next.
+
+`S` cycles the sort key, and `status` is one of them. It sorts by position
+in the pipeline rather than alphabetically:
+
+```
+interview · applied · silence · rejected · skipped · untouched
+```
+
+Interview first because that's the one with a date attached; untouched
+last because it's the absence of a decision, and 800 unmarked rows heading
+the list would be useless.
+
+The header keeps a running tally (`4 applied · 2 interview`), so you can
+see where things stand without changing filters to count them.
 
 ## Commands
 
@@ -224,16 +265,18 @@ MOVE     j/k or ↑/↓  move          g/G  top/bottom
 
 FILTER   s   startup mode on/off
          f   AI verdict: all / apply / consider / skip / unscored
-         m   your status: all / untouched / applied / …
+         m   your status: all / tracked / untouched / applied /
+             interview / rejected / skipped / silence
          /   search company, title and location
-         S   cycle sort key        R  reverse sort
+         S   sort: score / company / title / stage / posted / status
+         R   reverse sort
 
 TRIAGE   1 applied  2 interview  3 rejected  4 skipped  5 silence  0 clear
          n   edit notes            o  open in browser
 
-ENTRIES  a   add an application the scrapers never found
-         E   edit the selected row
-         D   delete it (hand-entered rows only)
+ENTRIES  a / i   add an application the scrapers never found
+         c / E   edit the selected row
+         dd / D  delete it (hand-entered rows only)
 
 RUN      r   fetch          e  score with Claude        F5  reload
          ?   help           q  quit
@@ -333,7 +376,7 @@ has no concept of company stage, so it can't do startup mode. See
 ## Development
 
 ```bash
-cargo test          # 71 unit tests, no network
+cargo test          # 85 unit tests, no network
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
@@ -341,7 +384,7 @@ cargo fmt
 Tests cover the filter rules (including the regex trap above), dedup and
 stage-precedence in the store, the HN posting parser, YC's stage mapping,
 the Anthropic tool-response parser (complete, truncated and refused
-shapes), `companies.yaml` appending, the manual-entry form and its merge
+shapes), `companies.yaml` appending, the manual-entry form's modal keys and merge
 semantics, and the TUI's filter/sort/selection logic. None of them touch
 the network.
 

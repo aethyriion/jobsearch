@@ -129,6 +129,22 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         ));
     }
 
+    // A running tally of where your applications stand, so the tracker
+    // state is visible without switching filters to count them.
+    let counts = app.status_counts();
+    if !counts.is_empty() {
+        spans.push(Span::raw(" "));
+        for (i, (status, n)) in counts.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::styled(" ", Style::default().fg(Color::DarkGray)));
+            }
+            spans.push(Span::styled(
+                format!("{n} {status}"),
+                my_status_style(Some(status)),
+            ));
+        }
+    }
+
     spans.push(Span::styled(
         format!(
             "  ai:{} mine:{} sort:{}{}",
@@ -472,13 +488,28 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_keys(f: &mut Frame, area: Rect, app: &App) {
     let keys = match app.mode {
-        Mode::Search | Mode::Notes => "enter save · esc cancel",
-        Mode::Help => "any key to close",
-        Mode::Form => "tab/↑↓ field · ←/→ cycle · enter newline · ^S save · esc cancel",
-        Mode::ConfirmDelete => "y delete · any other key cancel",
+        Mode::Search | Mode::Notes => "enter save · esc cancel".to_string(),
+        Mode::Help => "any key to close".to_string(),
+        // Drawn by draw_form; the form never reaches this footer.
+        Mode::Form => String::new(),
+        Mode::ConfirmDelete => "y delete · any other key cancel".to_string(),
+        // Every binding that isn't discoverable by looking at the screen
+        // belongs here, and the whole line has to fit — a hint that gets
+        // truncated off the right edge is the same as no hint. So the
+        // narrow forms drop the keys you can most easily rediscover
+        // (movement, panes) rather than the ones you can't (the filters).
         Mode::Normal => {
-            "j/k move · tab pane · s startup · / search · a add · E edit · 1-5 status · \
-             n note · o open · r fetch · e eval · ? help · q quit"
+            if area.width >= 132 {
+                "j/k move · tab pane · / search · s startup · f ai · m status · S sort · \
+                 1-5 mark · a add · E edit · n note · o open · r fetch · e eval · ? help · q quit"
+                    .to_string()
+            } else if area.width >= 92 {
+                "j/k move · / search · s startup · f ai · m status · S sort · 1-5 mark · \
+                 a add · o open · ? help · q quit"
+                    .to_string()
+            } else {
+                "s startup · f ai · m status · S sort · a add · ? help · q quit".to_string()
+            }
         }
     };
     f.render_widget(
@@ -499,9 +530,12 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from("  FILTER   s   startup mode on/off"),
         Line::from("           f   AI verdict: all/apply/consider/skip/unscored"),
-        Line::from("           m   your status: all/untouched/applied/..."),
+        Line::from("           m   your status: all/tracked/untouched/applied/"),
+        Line::from("               interview/rejected/skipped/silence"),
         Line::from("           /   search company, title and location"),
-        Line::from("           S   cycle sort key      R  reverse sort"),
+        Line::from("           S   sort: score/company/title/stage/posted/status"),
+        Line::from("               (status sorts interview first, untouched last)"),
+        Line::from("           R   reverse sort"),
         Line::from(""),
         Line::from("  TRIAGE   1 applied   2 interview   3 rejected"),
         Line::from("           4 skipped   5 silence     0 clear"),
@@ -575,7 +609,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 /// Draw the manual-entry page: a label/value row per single-line field,
 /// then the description box taking whatever height is left.
 fn draw_form(f: &mut Frame, area: Rect, app: &App) {
-    use super::form::{FieldKind, FIELDS};
+    use super::form::{FieldKind, FormMode, FIELDS};
 
     let Some(form) = &app.form else { return };
 
@@ -598,6 +632,7 @@ fn draw_form(f: &mut Frame, area: Rect, app: &App) {
             Constraint::Length(1),           // spacer
             Constraint::Min(4),              // description
             Constraint::Length(1),           // error / hint
+            Constraint::Length(1),           // key bar
         ])
         .split(inner);
 
@@ -633,7 +668,7 @@ fn draw_form(f: &mut Frame, area: Rect, app: &App) {
             ));
         } else {
             spans.push(Span::raw(value.to_string()));
-            if focused {
+            if focused && form.mode == FormMode::Insert {
                 spans.push(Span::styled("█", Style::default().fg(Color::Magenta)));
             }
         }
@@ -678,7 +713,7 @@ fn draw_form(f: &mut Frame, area: Rect, app: &App) {
         ))
     } else {
         let mut text = desc.to_string();
-        if desc_focused {
+        if desc_focused && form.mode == FormMode::Insert {
             text.push('█');
         }
         Paragraph::new(text)
@@ -701,7 +736,83 @@ fn draw_form(f: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::DarkGray),
         )),
     };
+    let footer = match form.mode {
+        FormMode::Command => Line::from(""),
+        _ => footer,
+    };
     f.render_widget(Paragraph::new(footer), rows[3]);
+
+    // The key bar lives here rather than in `draw_keys`, because the form
+    // is drawn as a whole page and returns before the shared footer is
+    // ever laid out. Leaving it to that footer is exactly how the save
+    // binding ended up invisible.
+    let bar = match form.mode {
+        FormMode::Command => Line::from(vec![
+            Span::styled(
+                format!("  :{}", form.command),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("█", Style::default().fg(Color::Magenta)),
+            Span::styled(
+                "      :w write · :wq write and close · :q close · :q! discard",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+        FormMode::Insert => Line::from(vec![
+            Span::styled(
+                "  -- INSERT --",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("   esc", Style::default().fg(Color::Cyan)),
+            Span::styled(" normal · ", Style::default().fg(Color::DarkGray)),
+            Span::styled("tab", Style::default().fg(Color::Cyan)),
+            Span::styled(" next field · ", Style::default().fg(Color::DarkGray)),
+            Span::styled("enter", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                if form.focused().kind == FieldKind::Multiline {
+                    " newline"
+                } else {
+                    " next field"
+                },
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+        FormMode::Normal => Line::from(vec![
+            Span::styled(
+                "  -- NORMAL --",
+                Style::default()
+                    .fg(Color::Blue)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("   j/k", Style::default().fg(Color::Cyan)),
+            Span::styled(" field · ", Style::default().fg(Color::DarkGray)),
+            Span::styled("i", Style::default().fg(Color::Cyan)),
+            Span::styled(" insert · ", Style::default().fg(Color::DarkGray)),
+            Span::styled("h/l", Style::default().fg(Color::Cyan)),
+            Span::styled(" cycle · ", Style::default().fg(Color::DarkGray)),
+            Span::styled("dd", Style::default().fg(Color::Cyan)),
+            Span::styled(" clear · ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "ZZ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" or ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                ":w",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" WRITE · ", Style::default().fg(Color::DarkGray)),
+            Span::styled("ZQ", Style::default().fg(Color::Cyan)),
+            Span::styled(" discard", Style::default().fg(Color::DarkGray)),
+        ]),
+    };
+    f.render_widget(Paragraph::new(bar), rows[4]);
 }
 
 fn draw_confirm_delete(f: &mut Frame, area: Rect, app: &App) {
