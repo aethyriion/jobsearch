@@ -29,6 +29,11 @@ def _load_config(path: str = FILTERS_CONFIG_PATH) -> dict:
 
 _config = _load_config()
 
+# Optional (defaults to none): checked BEFORE the priority list, so a
+# level/track mismatch can't be rescued by an otherwise-unambiguous
+# title — "Junior DevOps Engineer" and "Software Engineering Manager"
+# both contain a priority keyword as a substring.
+HARD_EXCLUSION_KEYWORDS = _config.get("hard_exclusion_keywords", [])
 PRIORITY_TITLE_KEYWORDS = _config["priority_title_keywords"]
 TITLE_ALLOW_KEYWORDS = _config["title_allow_keywords"]
 EXCLUSION_KEYWORDS = _config["exclusion_keywords"]
@@ -50,6 +55,19 @@ def _compile_keyword_alternation(keywords: list[str], config_key: str) -> re.Pat
     return re.compile("(" + "|".join(re.escape(k) for k in keywords) + ")", re.IGNORECASE)
 
 
+def _compile_word_boundary_alternation(keywords: list[str]) -> re.Pattern | None:
+    """Like _compile_keyword_alternation but word-boundary anchored, and
+    None for an empty list rather than an error — an absent/empty
+    hard-exclusion list just means "don't hard-exclude anything", which is
+    a safe default (unlike an empty allowlist). Boundaries matter here:
+    plain substring matching on "intern" would also drop "Software
+    Engineer, Internal Tools"."""
+    if not keywords:
+        return None
+    return re.compile(r"\b(" + "|".join(re.escape(k) for k in keywords) + r")\b", re.IGNORECASE)
+
+
+_hard_exclusion_re = _compile_word_boundary_alternation(HARD_EXCLUSION_KEYWORDS)
 _priority_re = _compile_keyword_alternation(PRIORITY_TITLE_KEYWORDS, "priority_title_keywords")
 _title_allow_re = _compile_keyword_alternation(TITLE_ALLOW_KEYWORDS, "title_allow_keywords")
 _exclusion_re = _compile_keyword_alternation(EXCLUSION_KEYWORDS, "exclusion_keywords")
@@ -87,6 +105,10 @@ def looks_truncated(description: str) -> bool:
 
 def title_is_relevant(title: str) -> bool:
     title = title or ""
+    if _hard_exclusion_re is not None and _hard_exclusion_re.search(title):
+        # Wrong level or wrong track — not rescuable by the priority list
+        # below (see HARD_EXCLUSION_KEYWORDS).
+        return False
     if _priority_re.search(title):
         # Unambiguous engineering title — e.g. "Software Engineer, Automated
         # Marketing" — skip the exclusion list entirely so a word like

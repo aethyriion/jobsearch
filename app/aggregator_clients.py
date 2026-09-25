@@ -241,7 +241,13 @@ def fetch_adzuna(params: dict) -> list[dict]:
     results, and the free tier's ranking means good matches can be a few
     pages deep. Fetches up to `max_pages` (default 5, set per-aggregator in
     aggregators.yaml), stopping early if a page comes back short (signals
-    we've hit the end of Adzuna's result set for that query)."""
+    we've hit the end of Adzuna's result set for that query).
+
+    Adzuna's search endpoint is per-country (the ISO code is part of the
+    path, not a query param), so `country` is a pipeline-level param like
+    `max_pages`: popped here and put in the URL rather than sent to Adzuna.
+    Defaults to "us"; set it per-aggregator in aggregators.yaml ("ca",
+    "gb", "de", ... — see Adzuna's docs for the supported list)."""
     app_id = os.environ.get("ADZUNA_APP_ID")
     app_key = os.environ.get("ADZUNA_APP_KEY")
     if not app_id or not app_key:
@@ -252,11 +258,12 @@ def fetch_adzuna(params: dict) -> list[dict]:
 
     params = dict(params)  # don't mutate the caller's dict (reused across runs)
     max_pages = params.pop("max_pages", 5)
+    country = params.pop("country", "us")
     results_per_page = params.get("results_per_page", 50)
 
     jobs = []
     for page in range(1, max_pages + 1):
-        url = f"https://api.adzuna.com/v1/api/jobs/ca/search/{page}"
+        url = f"https://api.adzuna.com/v1/api/jobs/{country}/search/{page}"
         query = {
             "app_id": app_id,
             "app_key": app_key,

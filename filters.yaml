@@ -1,6 +1,44 @@
 # Deterministic pre-filter rules, read by app/filters.py. Edit these lists
 # directly as you refine what "in scope" means for you — no code changes
 # needed. See app/filters.py's module docstring for how they're applied.
+#
+# Configured 2026-09-25 for Stephen Rhodes' search: senior/staff platform,
+# DevOps/SRE, infrastructure and backend roles; remote US-first, Ohio
+# on-site/hybrid, relocation within the US open. Stack from
+# aethyriion.dev/content/skills.toml (Kubernetes/AWS/Terraform/Nix,
+# Rust/Go/TypeScript/Python).
+
+# Checked FIRST, before everything else, and word-boundary matched: a title
+# matching one of these is dropped even if it also matches
+# priority_title_keywords below. Needed because the priority list is
+# substring-matched — "Junior DevOps Engineer" contains "devops engineer",
+# and "Software Engineering Manager" contains "software engineer" — so
+# level/track mismatches have to be vetoed before that rescue happens.
+# (app/filters.py treats this key as optional; an empty list = no hard
+# exclusions.)
+hard_exclusion_keywords:
+  # wrong level — the target is senior/staff
+  - "intern"          # word-boundary matched, so "Internal Tools" is safe
+  - "internship"
+  - "junior"
+  - "jr"
+  - "entry level"
+  - "entry-level"
+  - "new grad"
+  - "new graduate"
+  - "apprentice"
+  - "co-op"
+  - "trainee"
+  - "associate engineer"
+  # wrong track — IC/IC-lead, not people management. Delete these to see
+  # management roles too. "director"/"vp"/"head of" are deliberately broad:
+  # a live Sysdig run surfaced "Director of Security Engineering", which the
+  # narrower "director of engineering" missed.
+  - "engineering manager"
+  - "director"
+  - "vp"
+  - "vice president"
+  - "head of"
 
 # Unambiguous engineering-role title signals. If the title matches one of
 # these, it's kept regardless of exclusion_keywords below — e.g. "Software
@@ -15,10 +53,16 @@ priority_title_keywords:
   - "full stack"
   - "fullstack"
   - "full-stack"
+  - "platform engineer"
+  - "infrastructure engineer"
+  - "devops engineer"
+  - "site reliability engineer"
+  - "cloud engineer"
+  - "backend engineer"
 
 # Title must match at least one of these to be considered at all.
 title_allow_keywords:
-  - "engineer"        # covers Engineer / Engineering Manager / Software Engineering
+  - "engineer"        # covers Engineer / Software Engineering / Staff Engineer
   - "engineering"
   - "developer"
   - "development"
@@ -27,6 +71,7 @@ title_allow_keywords:
   - "sre"
   - "site reliability"
   - "devops"
+  - "dev ops"
   - "full stack"
   - "fullstack"
   - "full-stack"
@@ -34,12 +79,20 @@ title_allow_keywords:
   - "back-end"
   - "back end"
   - "platform"
+  - "infrastructure"
+  - "infra"
+  - "kubernetes"
+  - "cloud"
+  - "reliability"
+  - "observability"
+  - "systems"
   - "tech lead"
   - "technical lead"
 
 # Even if the title matched the allowlist above, drop it if it also
 # matches one of these — engineering-adjacent titles that aren't a fit.
 exclusion_keywords:
+  # --- wrong discipline entirely -------------------------------------
   - "accountant"
   - "accounting"
   - "nurse"
@@ -55,8 +108,16 @@ exclusion_keywords:
   - "sales representative"
   - "account executive"
   - "sales engineer"
+  - "solutions engineer"
+  - "solution engineer"
   - "sales development"
-  - "business development representative"
+  - "business development"
+  - "partner development"
+  - "partner manager"
+  - "partnerships"
+  - "channel sales"
+  - "solutions architect"
+  - "solution architect"
   - "recruiter"
   - "talent acquisition"
   - "talent brand"
@@ -84,60 +145,165 @@ exclusion_keywords:
   - "copywriting"
   - "compliance"
   - "product marketing"
+  - "compensation"           # "Incentive Compensation Systems Manager"
+  - "product manager"
+  - "program manager"
+  - "project manager"
+  - "systems manager"
+  - "operations manager"
+  # (Level and track — intern/junior/manager/director — are handled by
+  # hard_exclusion_keywords at the top of this file, not here.)
+  # --- support/IT-ops titles that match "systems"/"cloud"/"infra" -----
+  - "help desk"
+  - "helpdesk"
+  - "desktop support"
+  - "technical support"
+  - "field technician"
+  - "systems administrator"
+  - "sysadmin"
+  - "network administrator"
 
-# EDIT ME FIRST: locations to keep, as regex patterns (case-insensitive)
-# matched against the free-text location string each ATS/aggregator
-# returns. Ships below as Canada/Alberta-only (the original author's
-# search) — replace with your own country/region/cities, or every job
-# will get rejected regardless of how good a fit it is. Deliberately does
-# NOT allow a bare "Remote" with no country qualifier — some postings say
-# "Remote Poland"/"Remote Spain"/"Remote Australia" etc, so an allowlist
-# needs an explicit country/region signal instead.
+# Locations to keep, as regex patterns (case-insensitive) matched against
+# the free-text location string each ATS/aggregator returns.
+#
+# Configured for a remote-US search out of Ohio. Three things this has to
+# get right, all learned from live runs on 2026-09-25:
+#
+#  1. A bare "Remote" with no country qualifier is NOT allowed — plenty of
+#     postings say "Remote Poland"/"Remote Spain"/"Remote Australia".
+#  2. A bare '\bus\b' is NOT allowed either, because SmartRecruiters appends
+#     the country code to every location ("Santa Clara, CA, us"), which
+#     would quietly let in every US on-site role while Greenhouse's "Santa
+#     Clara, CA" stayed rejected — the same job kept or dropped depending on
+#     the ATS. So a US signal counts when it's at the START of the string
+#     ("United States (Remote)", "USA, Canada, Mexico") or paired with a
+#     remote word anywhere in it.
+#  3. "Remote" is not the only remote word: Sysdig says "Flexible - USA",
+#     others say "Distributed", "Home-based" or "Telecommute". Hence the
+#     alternation below — keep the two paired patterns in sync if you edit it.
 location_allow_patterns:
-  - '\bcanada\b'
-  - '\balberta\b'
-  - ',\s*ab\b'       # "Calgary, AB" / "Edmonton, AB"
-  - '\bedmonton\b'
-  - '\bcalgary\b'
-  - '\bontario\b'
-  - '\bvancouver\b'
+  # --- US / US-inclusive remote --------------------------------------
+  - '^\s*(?:united states|usa|u\.s\.|us)\b'   # "United States (Remote)", "USA | Remote", "USA, Canada"
+  # remote-word BEFORE the US signal: "Remote - US", "Flexible - USA", "Remote (US, Canada)"
+  - '\b(?:remote|flexible|distributed|home[\s-]?based|telecommut\w*|virtual|work from home|wfh|hybrid)\b.*\b(?:united states|usa|us|u\.s\.)'
+  # ...and AFTER it: "US Remote", "US-Remote", "Ohio, United States - Hybrid"
+  - '\b(?:united states|usa|us)\b.*\b(?:remote|flexible|distributed|home[\s-]?based|telecommut\w*|virtual|work from home|wfh|hybrid)\b'
+  - '\bu\.s\..*\b(?:remote|flexible|distributed|telecommut\w*|virtual|hybrid)\b'
+  - '\bus(?:a)?[\s-]*only\b'                  # Remotive: "USA Only"
+  - '\bnorth(?:ern)? america\b'               # Remotive returns both spellings
+  - '\bamericas\b'
+  - '\bworldwide\b'
+  - '\banywhere\b'
+  - '\bglobal(?:ly)?\b'
+  # --- Ohio: on-site / hybrid within commuting range -----------------
+  - '\bohio\b'
+  - ',\s*oh\b'              # "Columbus, OH"
+  - '\bcolumbus\b'
+  - '\bcincinnati\b'
+  - '\bcleveland\b'
+  - '\bdayton\b'
+  - '\bakron\b'
+  - '\btoledo\b'
+  # --- Relocation-eligible US on-site (uncomment to widen the search) -
+  # Relocation within the US is open per profile.yaml, but switching these on
+  # adds a LOT of volume — one live Arista Networks run went from 3 to 84
+  # candidates, nearly all on-site roles in CA/NH — and every extra candidate
+  # costs an AI-evaluation call. Uncomment when you want to see them.
+  # - ',\s*us$'                                 # SmartRecruiters' "Nashua, NH, us"
+  # - ',\s*(?:ca|ny|wa|tx|ma|co|il|ga|nc|pa|va|md|fl|az|ut|or|tn|mi|mn|wi|in|mo|nj|nh)\b'
+  # - '\b(?:san francisco|new york|seattle|austin|boston|denver|chicago|atlanta|pittsburgh)\b'
 
-# EDIT ME FIRST (along with stack_core below): JD stack dealbreakers — if
-# the description clearly requires one of these languages/frameworks and
-# does NOT also mention anything from stack_core, treat it as a mismatch.
-# Ships assuming a Python/JS candidate who wants to exclude
-# Java/C#/.NET/etc — if your own stack includes one of these "dealbreaker"
-# languages, move it down into stack_core instead, or this will reject
-# roles in your own stack. Only runs when a description is
-# available. Word-boundary matched to avoid e.g. "java" matching
-# "javascript". Deliberately NOT including bare "go" — too ambiguous
-# ("go-to-market", "go live", etc.); "golang" below covers it, and most Go
-# postings also say "Golang" or "Go (Golang)" somewhere in the JD.
+# JD stack dealbreakers — if the description clearly requires one of these
+# languages/frameworks and does NOT also mention anything from stack_core
+# below, treat it as a mismatch. Only runs when a description is available.
+# Word-boundary matched to avoid e.g. "java" matching "javascript".
+#
+# Because stack_core includes the platform tooling (Kubernetes, Terraform,
+# AWS, Docker, CI), this list only really fires on pure application-dev
+# roles in a stack that isn't a target — which is the intent. Java and C++
+# are listed even though they're on the résumé: both are shipped but dated,
+# and a Java-shop or C++-shop role isn't the target (see profile.yaml's
+# constraints).
 stack_dealbreakers:
-  - '\bjava\b'
   - '\bc#\b'
   - '\.net\b'
-  - '\bgolang\b'
+  - '\basp\.net\b'
+  - '\bvb\.net\b'
   - '\bruby\b'
   - '\brails\b'
   - '\bphp\b'
-  - '\bkotlin\b'
-  - '\bswift\b'
+  - '\blaravel\b'
+  - '\bdrupal\b'
+  - '\bwordpress\b'
+  - '\bmagento\b'
+  - '\bsalesforce\b'
+  - '\bapex\b'
+  - '\bsharepoint\b'
+  - '\babap\b'
+  - '\bcobol\b'
+  - '\bdelphi\b'
   - '\bscala\b'
+  - '\bswift\b'
+  - '\bkotlin\b'
+  - '\bobjective-c\b'
+  - '\bandroid\b'
+  - '\bios development\b'
+  - '\bjava\b'
   - '\bc\+\+\b'
+  - '\bmatlab\b'
+  - '\blabview\b'
 
 # Your own core stack — if the JD mentions any of these, a stack dealbreaker
 # match above is ignored (the role likely uses both, or the dealbreaker
-# keyword is a false positive).
+# keyword is a false positive). Mirrors content/skills.toml's daily/shipped
+# tiers, plus the platform tooling that defines the target roles.
 stack_core:
-  - '\bpython\b'
-  - '\bfastapi\b'
-  - '\bdjango\b'
-  - '\bflask\b'
-  - '\bjavascript\b'
+  # languages
+  - '\brust\b'
+  - '\bgolang\b'
+  - '\bgo\s+\(golang\)'
   - '\btypescript\b'
-  - '\breact\b'
+  - '\bjavascript\b'
   - '\bnode(?:\.?js)?\b'
+  - '\bpython\b'
+  - '\bnix(?:os)?\b'
+  - '\bbash\b'
+  - '\bshell scripting\b'
+  # platform / orchestration
+  - '\bkubernetes\b'
+  - '\bk8s\b'
+  - '\bk3s\b'
+  - '\beks\b'
+  - '\bhelm\b'
+  - '\bkustomize\b'
+  - '\bdocker\b'
+  - '\bcontainer(?:s|ized|ization)?\b'
+  # cloud / IaC
+  - '\baws\b'
+  - '\bamazon web services\b'
+  - '\bterraform\b'
+  - '\bcdktf\b'
+  - '\bpulumi\b'
+  - '\biac\b'
+  - '\binfrastructure as code\b'
+  # delivery / observability
+  - '\bargocd\b'
+  - '\bargo cd\b'
+  - '\bgitops\b'
+  - '\bcircleci\b'
+  - '\bgithub actions\b'
+  - '\bci/cd\b'
+  - '\bprometheus\b'
+  - '\bgrafana\b'
+  - '\bobservability\b'
+  - '\bsite reliability\b'
+  - '\bplatform engineering\b'
+  - '\bdevops\b'
+  # data stores
+  - '\bpostgres(?:ql)?\b'
+  - '\bmysql\b'
+  - '\bdynamodb\b'
+  - '\bredis\b'
 
 # Below this many characters, a JD is treated as a short aggregator teaser
 # snippet rather than a full posting (see app/filters.py's looks_truncated).
