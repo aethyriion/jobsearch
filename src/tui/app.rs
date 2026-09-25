@@ -39,6 +39,9 @@ pub enum SortKey {
     Title,
     Stage,
     Posted,
+    /// Your own tracking state, ordered by where it sits in the pipeline
+    /// rather than alphabetically — see `JobRow::status_rank`.
+    Status,
 }
 
 impl SortKey {
@@ -49,6 +52,7 @@ impl SortKey {
             SortKey::Title => "title",
             SortKey::Stage => "stage",
             SortKey::Posted => "posted",
+            SortKey::Status => "status",
         }
     }
 
@@ -58,7 +62,8 @@ impl SortKey {
             SortKey::Company => SortKey::Title,
             SortKey::Title => SortKey::Stage,
             SortKey::Stage => SortKey::Posted,
-            SortKey::Posted => SortKey::Score,
+            SortKey::Posted => SortKey::Status,
+            SortKey::Status => SortKey::Score,
         }
     }
 }
@@ -112,6 +117,8 @@ impl AiFilter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MyFilter {
     All,
+    /// Anything you've acted on at all — the application tracker view.
+    Tracked,
     Untouched,
     Applied,
     Interview,
@@ -124,6 +131,7 @@ impl MyFilter {
     pub fn label(self) -> &'static str {
         match self {
             MyFilter::All => "all",
+            MyFilter::Tracked => "tracked",
             MyFilter::Untouched => "untouched",
             MyFilter::Applied => "applied",
             MyFilter::Interview => "interview",
@@ -135,7 +143,8 @@ impl MyFilter {
 
     pub fn next(self) -> Self {
         match self {
-            MyFilter::All => MyFilter::Untouched,
+            MyFilter::All => MyFilter::Tracked,
+            MyFilter::Tracked => MyFilter::Untouched,
             MyFilter::Untouched => MyFilter::Applied,
             MyFilter::Applied => MyFilter::Interview,
             MyFilter::Interview => MyFilter::Rejected,
@@ -148,6 +157,7 @@ impl MyFilter {
     fn matches(self, row: &JobRow) -> bool {
         match self {
             MyFilter::All => true,
+            MyFilter::Tracked => row.my_status.is_some(),
             MyFilter::Untouched => row.my_status.is_none(),
             other => row.my_status.as_deref() == Some(other.label()),
         }
@@ -204,6 +214,9 @@ pub struct App {
     /// approached from — the list appears to jump rather than scroll.
     pub table_state: TableState,
 
+    /// First key of a pending two-key sequence in the list (`dd`).
+    pub pending_key: Option<char>,
+
     /// Live only in `Mode::Form`. Held here rather than in the event loop
     /// so a redraw tick can render a half-filled form without it being
     /// threaded through every call.
@@ -231,6 +244,7 @@ impl App {
             task: TaskState::default(),
             should_quit: false,
             table_state: TableState::default(),
+            pending_key: None,
             form: None,
         };
         app.recompute();
@@ -309,6 +323,9 @@ impl App {
                     .unwrap_or(u8::MAX)
                     .cmp(&rb.stage.map(|s| s as u8).unwrap_or(u8::MAX)),
                 SortKey::Posted => ra.posted_at.cmp(&rb.posted_at),
+                SortKey::Status => {
+                    status_rank(ra.my_status.as_deref()).cmp(&status_rank(rb.my_status.as_deref()))
+                }
             }
             .then_with(|| ra.company.cmp(&rb.company))
         });
@@ -381,6 +398,8 @@ impl App {
 
     pub fn cycle_sort(&mut self) {
         self.sort = self.sort.next();
+        // Status sorts ascending so the live end of the pipeline
+        // (interview, then applied) is at the top rather than the bottom.
         self.sort_desc = matches!(self.sort, SortKey::Score | SortKey::Posted);
         self.recompute();
         self.status = format!(
@@ -538,6 +557,16 @@ impl App {
         Ok(())
     }
 
+    /// `dd` / `D` — ask to delete the selected row, if it's one we're
+    /// willing to delete.
+    pub fn request_delete(&mut self) {
+        match self.selected_row() {
+            Some(row) if row.is_manual() => self.mode = Mode::ConfirmDelete,
+            Some(_) => self.status = "only hand-entered rows can be deleted".into(),
+            None => {}
+        }
+    }
+
     pub fn manual_count(&self) -> usize {
         self.rows.iter().filter(|r| r.is_manual()).count()
     }
@@ -565,8 +594,40 @@ impl App {
             .count()
     }
 
+    /// How many rows carry each status, for the header's tracker summary.
+    pub fn status_counts(&self) -> Vec<(&'static str, usize)> {
+        MY_STATUS_VALUES
+            .iter()
+            .map(|&status| {
+                (
+                    status,
+                    self.rows
+                        .iter()
+                        .filter(|r| r.my_status.as_deref() == Some(status))
+                        .count(),
+                )
+            })
+            .filter(|(_, n)| *n > 0)
+            .collect()
+    }
+
     pub fn status_key(index: usize) -> Option<&'static str> {
         MY_STATUS_VALUES.get(index).copied()
+    }
+}
+
+/// Sort order for `my_status`: where it sits in the pipeline, not the
+/// alphabet. Interview first because that's the one with a date attached;
+/// untouched last because it's the absence of a decision, and burying it
+/// beats having 800 unmarked rows head a status sort.
+fn status_rank(status: Option<&str>) -> u8 {
+    match status {
+        Some("interview") => 0,
+        Some("applied") => 1,
+        Some("silence") => 2,
+        Some("rejected") => 3,
+        Some("skipped") => 4,
+        _ => 5,
     }
 }
 
@@ -705,6 +766,86 @@ mod tests {
         a.search = "remote".into();
         a.recompute();
         assert_eq!(a.view.len(), 4, "location is searchable too");
+    }
+
+    #[test]
+    fn status_sorts_by_pipeline_position_not_alphabetically() {
+        let with_status = |company: &str, status: Option<&str>| JobRow {
+            url: format!("https://x/{company}"),
+            company: company.into(),
+            my_status: status.map(str::to_string),
+            stage: Some(Stage::Seed),
+            ..Default::default()
+        };
+        let mut a = App::new(
+            vec![
+                with_status("Untouched", None),
+                with_status("Rejected", Some("rejected")),
+                with_status("Interview", Some("interview")),
+                with_status("Applied", Some("applied")),
+            ],
+            policy(),
+        );
+        a.sort = SortKey::Status;
+        a.sort_desc = false;
+        a.recompute();
+        let order: Vec<_> = a.view.iter().map(|&i| a.rows[i].company.clone()).collect();
+        assert_eq!(
+            order,
+            vec!["Interview", "Applied", "Rejected", "Untouched"],
+            "live end of the pipeline first, absence of a decision last"
+        );
+    }
+
+    #[test]
+    fn tracked_filter_shows_everything_you_have_acted_on() {
+        let with_status = |company: &str, status: Option<&str>| JobRow {
+            url: format!("https://x/{company}"),
+            company: company.into(),
+            my_status: status.map(str::to_string),
+            stage: Some(Stage::Seed),
+            ..Default::default()
+        };
+        let mut a = App::new(
+            vec![
+                with_status("A", Some("applied")),
+                with_status("B", Some("rejected")),
+                with_status("C", None),
+            ],
+            policy(),
+        );
+        a.my_filter = MyFilter::Tracked;
+        a.recompute();
+        assert_eq!(a.view.len(), 2);
+
+        a.my_filter = MyFilter::Untouched;
+        a.recompute();
+        assert_eq!(a.view.len(), 1);
+    }
+
+    #[test]
+    fn the_status_filter_cycle_reaches_every_value() {
+        let mut seen = vec![];
+        let mut f = MyFilter::All;
+        for _ in 0..16 {
+            seen.push(f.label());
+            f = f.next();
+            if f == MyFilter::All {
+                break;
+            }
+        }
+        for expected in [
+            "all",
+            "tracked",
+            "untouched",
+            "applied",
+            "interview",
+            "rejected",
+            "skipped",
+            "silence",
+        ] {
+            assert!(seen.contains(&expected), "cycle must reach {expected}");
+        }
     }
 
     #[test]
