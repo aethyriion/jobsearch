@@ -116,6 +116,42 @@ enum Command {
         limit: usize,
     },
 
+    /// Record an application by hand — a role the scrapers never found,
+    /// or one you applied to through a referral. Shows inline with the
+    /// fetched jobs and is scored by `evaluate` like any other.
+    Add {
+        #[arg(long)]
+        company: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long, default_value = "")]
+        location: String,
+        /// The posting URL. Omitted, a stable `manual:` one is generated
+        /// from company and title.
+        #[arg(long, default_value = "")]
+        url: String,
+        /// YYYY-MM-DD.
+        #[arg(long, default_value = "")]
+        posted: String,
+        /// Job description. Prefer --description-file for a real posting.
+        #[arg(long, default_value = "")]
+        description: String,
+        /// Read the description from a file, or from stdin with `-`.
+        #[arg(long, value_name = "PATH")]
+        description_file: Option<String>,
+        /// pre-seed | seed | series-a | series-b | series-c | growth |
+        /// public | big-tech
+        #[arg(long)]
+        stage: Option<String>,
+        #[arg(long)]
+        headcount: Option<i64>,
+        /// applied | interview | rejected | skipped | silence
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+
     /// Validate every config file and report what's known about stages.
     Check,
 }
@@ -174,6 +210,34 @@ async fn async_main() -> Result<()> {
             recheck,
         } => cmd_discover_yc(&paths, limit, concurrency, stages_only, recheck).await,
         Command::Inspect { url, limit } => cmd_inspect(&paths, url, limit),
+        Command::Add {
+            company,
+            title,
+            location,
+            url,
+            posted,
+            description,
+            description_file,
+            stage,
+            headcount,
+            status,
+            notes,
+        } => cmd_add(
+            &paths,
+            AddArgs {
+                company,
+                title,
+                location,
+                url,
+                posted,
+                description,
+                description_file,
+                stage,
+                headcount,
+                status,
+                notes,
+            },
+        ),
         Command::Check => cmd_check(&paths),
     }
 }
@@ -656,6 +720,93 @@ fn cmd_inspect(paths: &Paths, url: Option<String>, limit: usize) -> Result<()> {
     Ok(())
 }
 
+// -------------------------------------------------------------------- add
+
+struct AddArgs {
+    company: String,
+    title: String,
+    location: String,
+    url: String,
+    posted: String,
+    description: String,
+    description_file: Option<String>,
+    stage: Option<String>,
+    headcount: Option<i64>,
+    status: Option<String>,
+    notes: Option<String>,
+}
+
+fn cmd_add(paths: &Paths, args: AddArgs) -> Result<()> {
+    let store = Store::open(paths.db())?;
+
+    let description = match args.description_file.as_deref() {
+        Some("-") => {
+            use std::io::Read;
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .context("reading the description from stdin")?;
+            buf
+        }
+        Some(path) => std::fs::read_to_string(path)
+            .with_context(|| format!("reading the description from {path}"))?,
+        None => args.description,
+    };
+
+    // Both are validated up front rather than silently dropped: a typo'd
+    // --stage that quietly became "no stage" would be invisible until you
+    // noticed the row missing from startup mode.
+    let stage = match args.stage.as_deref() {
+        Some(raw) => Some(model::Stage::parse(raw).ok_or_else(|| {
+            anyhow::anyhow!(
+                "--stage {raw:?} isn't a known stage. Valid, earliest first: {}",
+                model::Stage::ALL
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?),
+        None => None,
+    };
+    if let Some(status) = args.status.as_deref() {
+        if !model::MY_STATUS_VALUES.contains(&status) {
+            anyhow::bail!(
+                "--status {status:?} isn't valid. One of: {}",
+                model::MY_STATUS_VALUES.join(", ")
+            );
+        }
+    }
+
+    let entry = store::ManualEntry {
+        url: args.url,
+        company: args.company,
+        title: args.title,
+        location: args.location,
+        posted_at: args.posted,
+        description,
+        stage,
+        headcount: args.headcount,
+        my_status: args.status,
+        notes: args.notes,
+    }
+    .with_url();
+
+    let created = store.upsert_manual_job(&entry)?;
+    println!(
+        "{} {} — {}",
+        if created { "Added" } else { "Updated" },
+        entry.company,
+        entry.title
+    );
+    println!("  url   {}", entry.url);
+    if let Some(stage) = entry.stage {
+        println!("  stage {}", stage.as_str());
+    }
+    println!("\nIt shows inline in the TUI and is queued for `jobsearch evaluate`.");
+    Ok(())
+}
+
 // ------------------------------------------------------------------ check
 
 fn cmd_check(paths: &Paths) -> Result<()> {
@@ -740,9 +891,10 @@ fn cmd_check(paths: &Paths) -> Result<()> {
             let startup = all.iter().filter(|r| filters.startup.admits(r)).count();
             let scored = all.iter().filter(|r| r.match_score.is_some()).count();
             println!("database          {}", paths.db().display());
+            let manual = all.iter().filter(|r| r.is_manual()).count();
             println!(
                 "                  {} candidates, {startup} startup, {scored} scored, \
-                 {} companies with a known stage",
+                 {manual} entered by hand,\n                  {} companies with a known stage",
                 all.len(),
                 store.company_stage_count()?
             );

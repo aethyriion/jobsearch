@@ -186,6 +186,15 @@ impl StartupPolicy {
     /// signals. A company with a stage but no headcount is judged on
     /// stage alone rather than being dropped for missing data.
     pub fn admits(&self, row: &JobRow) -> bool {
+        // A hand-entered row is never filtered out. Startup mode is a
+        // discovery aid — it decides which of thousands of scraped
+        // postings are worth your attention — and an application you
+        // typed in yourself was never discovered. Hiding a job you
+        // actually applied to because the employer turned out to be
+        // public would defeat the point of tracking it.
+        if row.is_manual() {
+            return true;
+        }
         if let Some(max) = self.max_headcount {
             if row.headcount.is_some_and(|h| h > max) {
                 return false;
@@ -451,6 +460,32 @@ mod tests {
             headcount,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn manual_entries_are_never_filtered_out_by_startup_mode() {
+        let p = StartupPolicy {
+            enabled_by_default: true,
+            max_stage: Stage::Growth,
+            max_headcount: Some(500),
+            include_unknown: false,
+        };
+        // Big, public, huge headcount, no stage — every reason to hide it,
+        // except that the user entered it by hand.
+        let manual = JobRow {
+            source: crate::model::MANUAL_SOURCE.to_string(),
+            stage: Some(Stage::BigTech),
+            headcount: Some(90_000),
+            ..Default::default()
+        };
+        assert!(p.admits(&manual));
+
+        // The same row from a fetcher is filtered as usual.
+        let scraped = JobRow {
+            source: "greenhouse".to_string(),
+            ..manual.clone()
+        };
+        assert!(!p.admits(&scraped));
     }
 
     #[test]

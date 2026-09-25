@@ -20,6 +20,10 @@ pub enum Mode {
     Search,
     Notes,
     Help,
+    /// The manual-entry page, adding or editing an application by hand.
+    Form,
+    /// Confirming deletion of the selected manual entry.
+    ConfirmDelete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,6 +203,11 @@ pub struct App {
     /// keeps the selection on screen but pins it to whichever edge you
     /// approached from — the list appears to jump rather than scroll.
     pub table_state: TableState,
+
+    /// Live only in `Mode::Form`. Held here rather than in the event loop
+    /// so a redraw tick can render a half-filled form without it being
+    /// threaded through every call.
+    pub form: Option<super::form::Form>,
 }
 
 impl App {
@@ -222,6 +231,7 @@ impl App {
             task: TaskState::default(),
             should_quit: false,
             table_state: TableState::default(),
+            form: None,
         };
         app.recompute();
         app
@@ -441,6 +451,95 @@ impl App {
             Ok(()) => self.status = format!("opened {url}"),
             Err(e) => self.status = format!("couldn't open browser ({e}) — {url}"),
         }
+    }
+
+    /// Open a blank manual-entry form.
+    pub fn open_add_form(&mut self) {
+        let mut form = super::form::Form::new();
+        // Seed the search box's text as the company: typing `/acme` then
+        // finding nothing is the most common way to discover a job isn't
+        // tracked yet, and re-typing the name is pure friction.
+        if !self.search.is_empty() && self.view.is_empty() {
+            form.set(super::form::FieldId::Company, &self.search);
+        }
+        self.form = Some(form);
+        self.mode = Mode::Form;
+    }
+
+    /// Open the form pre-filled from the selected row.
+    ///
+    /// Any row can be edited, not just manual ones: correcting a mangled
+    /// title or adding a stage to a scraped posting is useful, and
+    /// `upsert_manual_job` merges rather than overwriting, keeping the
+    /// original source.
+    pub fn open_edit_form(&mut self) {
+        let Some(row) = self.selected_row() else {
+            self.status = "nothing selected".into();
+            return;
+        };
+        self.form = Some(super::form::Form::from_row(row));
+        self.mode = Mode::Form;
+    }
+
+    /// Validate and save the open form. Returns false if it didn't
+    /// validate, leaving the form open with the error shown.
+    pub fn save_form(&mut self, store: &Store) -> Result<bool> {
+        let Some(form) = &mut self.form else {
+            return Ok(false);
+        };
+        let entry = match form.to_entry() {
+            Ok(entry) => entry,
+            Err(e) => {
+                form.error = Some(e);
+                return Ok(false);
+            }
+        };
+        let created = store.upsert_manual_job(&entry)?;
+        let url = entry.url.clone();
+        self.form = None;
+        self.mode = Mode::Normal;
+        self.reload(store)?;
+        // Land the cursor on what was just saved, so the next keystroke
+        // acts on it — otherwise a new entry vanishes into a list of 800.
+        if let Some(pos) = self.view.iter().position(|&i| self.rows[i].url == url) {
+            self.selected = pos;
+        }
+        self.status = if created {
+            format!("added {} — {}", entry.company, entry.title)
+        } else {
+            format!("updated {} — {}", entry.company, entry.title)
+        };
+        Ok(true)
+    }
+
+    pub fn cancel_form(&mut self) {
+        self.form = None;
+        self.mode = Mode::Normal;
+        self.status = "cancelled".into();
+    }
+
+    /// Delete the selected row, but only if it's a manual one — deleting a
+    /// fetched row would just invite it straight back on the next run,
+    /// which looks like the delete silently failing.
+    pub fn delete_selected(&mut self, store: &Store) -> Result<()> {
+        let Some(row) = self.selected_row() else {
+            return Ok(());
+        };
+        if !row.is_manual() {
+            self.status = "only hand-entered rows can be deleted".into();
+            self.mode = Mode::Normal;
+            return Ok(());
+        }
+        let (url, company, title) = (row.url.clone(), row.company.clone(), row.title.clone());
+        store.delete_job(&url)?;
+        self.mode = Mode::Normal;
+        self.reload(store)?;
+        self.status = format!("deleted {company} — {title}");
+        Ok(())
+    }
+
+    pub fn manual_count(&self) -> usize {
+        self.rows.iter().filter(|r| r.is_manual()).count()
     }
 
     /// Reload every row from SQLite, keeping the cursor on the same job.

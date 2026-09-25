@@ -303,6 +303,13 @@ pub fn run_refilter(store: &Store, filters: &Filters, dry_run: bool) -> Result<R
     }
 
     for row in store.all_candidates()? {
+        // Manual entries are exempt in this direction only. They were
+        // never admitted by the filters in the first place, so letting a
+        // filter tweak demote one would quietly delete an application from
+        // your tracking list.
+        if row.is_manual() {
+            continue;
+        }
         summary.checked += 1;
         let job = row_as_job(&row);
         if !filters.passes(&job) {
