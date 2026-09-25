@@ -450,12 +450,20 @@ impl Store {
     pub fn unevaluated(
         &self,
         startup_only: Option<&crate::filters::StartupPolicy>,
+        seniority: Option<&crate::filters::SeniorityPolicy>,
     ) -> Result<Vec<JobRow>> {
         let rows = self.query_rows(
             "WHERE jd.passed_filters = 1 AND ae.url IS NULL",
             "ORDER BY jd.fetched_at DESC",
         )?;
-        Ok(match startup_only {
+        // Both policies gate the QUEUE, not just the display, because
+        // this is the step that costs money: paying to score levels or
+        // stages you're filtering out is the expensive way to run them.
+        let rows: Vec<JobRow> = match startup_only {
+            Some(policy) => rows.into_iter().filter(|r| policy.admits(r)).collect(),
+            None => rows,
+        };
+        Ok(match seniority {
             Some(policy) => rows.into_iter().filter(|r| policy.admits(r)).collect(),
             None => rows,
         })
@@ -971,7 +979,7 @@ mod tests {
             // Strict: an unknown-stage scraped row would be excluded here.
             include_unknown: false,
         };
-        assert_eq!(s.unevaluated(Some(&policy)).unwrap().len(), 1);
+        assert_eq!(s.unevaluated(Some(&policy), None).unwrap().len(), 1);
     }
 
     #[test]
@@ -1018,14 +1026,14 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(s.unevaluated(None).unwrap().len(), 2);
+        assert_eq!(s.unevaluated(None, None).unwrap().len(), 2);
         let policy = crate::filters::StartupPolicy {
             enabled_by_default: true,
             max_stage: Stage::Growth,
             max_headcount: None,
             include_unknown: false,
         };
-        let queue = s.unevaluated(Some(&policy)).unwrap();
+        let queue = s.unevaluated(Some(&policy), None).unwrap();
         assert_eq!(queue.len(), 1);
         assert_eq!(queue[0].company, "Fly.io");
     }

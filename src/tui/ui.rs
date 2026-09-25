@@ -4,7 +4,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap};
 
 use super::app::{App, Mode, Pane};
-use crate::model::{JobRow, Stage};
+use crate::model::{JobRow, Seniority, Stage};
 
 /// Colors are chosen to stay legible on both light and dark terminals:
 /// no bright-on-bright, and never color as the *only* carrier of meaning —
@@ -15,6 +15,19 @@ fn stage_style(stage: Option<Stage>) -> Style {
         Some(Stage::SeriesA) | Some(Stage::SeriesB) => Style::default().fg(Color::Cyan),
         Some(Stage::SeriesC) | Some(Stage::Growth) => Style::default().fg(Color::Blue),
         Some(Stage::Public) | Some(Stage::BigTech) => Style::default().fg(Color::DarkGray),
+        None => Style::default().fg(Color::DarkGray),
+    }
+}
+
+/// Junior and intern stand out because they're the rungs you'd be
+/// deliberately looking for when you widen the search; manager is dimmed
+/// because it's a different track rather than a level.
+fn level_style(level: Option<Seniority>) -> Style {
+    match level {
+        Some(Seniority::Intern) | Some(Seniority::Junior) => Style::default().fg(Color::Magenta),
+        Some(Seniority::Mid) => Style::default().fg(Color::Cyan),
+        Some(Seniority::Senior) | Some(Seniority::Staff) => Style::default().fg(Color::Blue),
+        Some(Seniority::Manager) => Style::default().fg(Color::DarkGray),
         None => Style::default().fg(Color::DarkGray),
     }
 }
@@ -147,9 +160,10 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
 
     spans.push(Span::styled(
         format!(
-            "  ai:{} mine:{} sort:{}{}",
+            "  ai:{} mine:{} lvl:{} sort:{}{}",
             app.ai_filter.label(),
             app.my_filter.label(),
+            app.level_filter.label(),
             app.sort.label(),
             if app.sort_desc { "↓" } else { "↑" }
         ),
@@ -196,6 +210,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
         Cell::from(""),
         Cell::from("company"),
         Cell::from("title"),
+        Cell::from("lvl"),
         Cell::from("stg"),
         Cell::from("rec"),
         Cell::from("mine"),
@@ -226,6 +241,8 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
                     .style(Style::default().fg(Color::Magenta)),
                 Cell::from(r.company.clone()),
                 Cell::from(r.title.clone()),
+                Cell::from(r.seniority().map(Seniority::short).unwrap_or("–"))
+                    .style(level_style(r.seniority())),
                 Cell::from(r.stage.map(Stage::short).unwrap_or("?")).style(stage_style(r.stage)),
                 Cell::from(r.ai_status().to_string()).style(recommendation_style(r.ai_status())),
                 Cell::from(r.my_status.clone().unwrap_or_default())
@@ -239,6 +256,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
         Constraint::Length(1),
         Constraint::Percentage(26),
         Constraint::Fill(1),
+        Constraint::Length(3),
         Constraint::Length(4),
         Constraint::Length(8),
         Constraint::Length(9),
@@ -311,6 +329,19 @@ fn detail_lines(row: &JobRow) -> Vec<Line<'static>> {
     ];
 
     let mut meta = vec![Span::raw(row.location.clone())];
+    match row.seniority() {
+        Some(level) => {
+            meta.push(Span::raw(" · "));
+            meta.push(Span::styled(
+                level.as_str().to_string(),
+                level_style(Some(level)),
+            ));
+        }
+        None => meta.push(Span::styled(
+            " · level not stated",
+            Style::default().fg(Color::DarkGray),
+        )),
+    }
     if let Some(stage) = row.stage {
         meta.push(Span::raw(" · "));
         meta.push(Span::styled(
@@ -500,15 +531,15 @@ fn draw_keys(f: &mut Frame, area: Rect, app: &App) {
         // (movement, panes) rather than the ones you can't (the filters).
         Mode::Normal => {
             if area.width >= 132 {
-                "j/k move · tab pane · / search · s startup · f ai · m status · S sort · \
-                 1-5 mark · a add · E edit · n note · o open · r fetch · e eval · ? help · q quit"
+                "j/k move · / search · s startup · L level · f ai · m status · S sort · \
+                 1-5 mark · a add · c edit · n note · o open · r fetch · e eval · ? help · q quit"
                     .to_string()
             } else if area.width >= 92 {
-                "j/k move · / search · s startup · f ai · m status · S sort · 1-5 mark · \
-                 a add · o open · ? help · q quit"
+                "j/k move · / search · s startup · L level · f ai · m status · S sort · \
+                 1-5 mark · a add · ? help · q quit"
                     .to_string()
             } else {
-                "s startup · f ai · m status · S sort · a add · ? help · q quit".to_string()
+                "s startup · L level · f ai · m status · S sort · a add · ? help".to_string()
             }
         }
     };
@@ -529,11 +560,15 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from("           tab           switch pane   J/K  scroll detail"),
         Line::from(""),
         Line::from("  FILTER   s   startup mode on/off"),
+        Line::from("           L   level: the filters.yaml policy, then each rung"),
+        Line::from("               (intern/junior/mid/senior/staff/manager),"),
+        Line::from("               then unlabelled, then any"),
         Line::from("           f   AI verdict: all/apply/consider/skip/unscored"),
         Line::from("           m   your status: all/tracked/untouched/applied/"),
         Line::from("               interview/rejected/skipped/silence"),
         Line::from("           /   search company, title and location"),
-        Line::from("           S   sort: score/company/title/stage/posted/status"),
+        Line::from("           S   sort: score/company/title/stage/posted/"),
+        Line::from("               status/level"),
         Line::from("               (status sorts interview first, untouched last)"),
         Line::from("           R   reverse sort"),
         Line::from(""),

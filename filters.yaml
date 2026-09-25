@@ -17,20 +17,15 @@
 # (app/filters.py treats this key as optional; an empty list = no hard
 # exclusions.)
 hard_exclusion_keywords:
-  # wrong level — the target is senior/staff
-  - "intern"          # word-boundary matched, so "Internal Tools" is safe
-  - "internship"
-  - "junior"
-  - "jr"
-  - "entry level"
-  - "entry-level"
-  - "new grad"
-  - "new graduate"
-  - "apprentice"
-  - "co-op"
-  - "trainee"
-  - "associate engineer"
-  # wrong track — IC/IC-lead, not people management. Delete these to see
+  # LEVEL vetoes used to live here (intern, junior, entry level, new grad,
+  # ...). They were moved out on 2026-09-25 and replaced by the `seniority:`
+  # policy at the bottom of this file, because a keyword veto here is a
+  # FETCH-time decision: it marks the job as failed and it never appears
+  # again, so changing your mind means a re-fetch. The seniority policy is a
+  # view filter instead — everything is stored, and widening or narrowing
+  # the range takes effect instantly against jobs already in the database.
+  #
+  # What remains here is the wrong TRACK, not the wrong level — IC/IC-lead, not people management. Delete these to see
   # management roles too. "director"/"vp"/"head of" are deliberately broad:
   # a live Sysdig run surfaced "Director of Security Engineering", which the
   # narrower "director of engineering" missed.
@@ -351,4 +346,37 @@ startup:
   # Flip it to `false` once `jobsearch check` shows most companies carrying
   # a stage — that's when "startup" starts meaning "known to be a startup"
   # rather than "not known to be big".
+  include_unknown: true
+
+# ---------------------------------------------------------------------------
+# Seniority
+# ---------------------------------------------------------------------------
+# Which rungs of the ladder are in scope. Like `startup:` above, this is a
+# VIEW policy, not a fetch policy: every posting is stored whatever its
+# level, so changing this range takes effect immediately against jobs
+# already in the database — no re-fetch. Press `L` in the TUI to narrow to
+# one rung without editing anything here.
+#
+# The level is read from the job title (see `infer_seniority`). It handles
+# the usual markers — Junior/Jr, Entry Level, New Grad, I/II/III, Senior/Sr,
+# Staff/Principal/Lead, and the management track — plus one real trap:
+# "Member of Technical Staff" is a flat title several AI labs use at every
+# level, so its "staff" is deliberately NOT read as staff-level.
+seniority:
+  # Lowest rung to include, inclusive. Widened from senior to junior on
+  # 2026-09-25: senior-at-a-startup work often maps to a mid or junior
+  # posting at a larger company, and the AI scoring step is a better judge
+  # of whether a specific role is a step down than a title keyword is.
+  min: junior
+
+  # Highest rung to include, inclusive. `staff` keeps principal/lead IC
+  # roles in and leaves `manager` out — management is also vetoed at fetch
+  # time in hard_exclusion_keywords above.
+  max: staff
+
+  # Whether a posting whose title carries no level marker survives.
+  #
+  # Keep this true. A bare "Software Engineer" is one of the commonest
+  # titles there is and genuinely states no level; excluding those would
+  # throw away most of the list to avoid a handful of mismatches.
   include_unknown: true

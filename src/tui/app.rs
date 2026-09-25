@@ -5,8 +5,8 @@
 //! testable without a terminal. `ui.rs` draws this state; `mod.rs` owns
 //! the event loop and the background tasks.
 
-use crate::filters::StartupPolicy;
-use crate::model::{JobRow, MY_STATUS_VALUES};
+use crate::filters::{SeniorityPolicy, StartupPolicy};
+use crate::model::{JobRow, Seniority, MY_STATUS_VALUES};
 use crate::store::Store;
 use anyhow::Result;
 use ratatui::widgets::TableState;
@@ -42,6 +42,8 @@ pub enum SortKey {
     /// Your own tracking state, ordered by where it sits in the pipeline
     /// rather than alphabetically — see `JobRow::status_rank`.
     Status,
+    /// Role seniority, lowest rung first.
+    Level,
 }
 
 impl SortKey {
@@ -53,6 +55,7 @@ impl SortKey {
             SortKey::Stage => "stage",
             SortKey::Posted => "posted",
             SortKey::Status => "status",
+            SortKey::Level => "level",
         }
     }
 
@@ -63,7 +66,8 @@ impl SortKey {
             SortKey::Title => SortKey::Stage,
             SortKey::Stage => SortKey::Posted,
             SortKey::Posted => SortKey::Status,
-            SortKey::Status => SortKey::Score,
+            SortKey::Status => SortKey::Level,
+            SortKey::Level => SortKey::Score,
         }
     }
 }
@@ -164,6 +168,52 @@ impl MyFilter {
     }
 }
 
+/// The level filter, as cycled by `L`. `Unlabelled` is a first-class
+/// value because a bare "Software Engineer" carries no level and those are
+/// common enough to want to look at on their own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LevelFilter {
+    /// Everything the configured policy admits.
+    Policy,
+    Only(Seniority),
+    Unlabelled,
+    /// Every level, ignoring the policy entirely.
+    All,
+}
+
+impl LevelFilter {
+    pub fn label(self) -> String {
+        match self {
+            LevelFilter::Policy => "policy".to_string(),
+            LevelFilter::Only(l) => l.as_str().to_string(),
+            LevelFilter::Unlabelled => "unlabelled".to_string(),
+            LevelFilter::All => "any".to_string(),
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            LevelFilter::Policy => LevelFilter::Only(Seniority::Intern),
+            LevelFilter::Only(Seniority::Manager) => LevelFilter::Unlabelled,
+            LevelFilter::Only(l) => {
+                let i = Seniority::ALL.iter().position(|x| *x == l).unwrap_or(0);
+                LevelFilter::Only(Seniority::ALL[(i + 1) % Seniority::ALL.len()])
+            }
+            LevelFilter::Unlabelled => LevelFilter::All,
+            LevelFilter::All => LevelFilter::Policy,
+        }
+    }
+
+    fn matches(self, row: &JobRow, policy: &SeniorityPolicy) -> bool {
+        match self {
+            LevelFilter::Policy => policy.admits(row),
+            LevelFilter::All => true,
+            LevelFilter::Unlabelled => row.seniority().is_none(),
+            LevelFilter::Only(want) => row.seniority() == Some(want),
+        }
+    }
+}
+
 /// A long-running background operation, for the status bar.
 #[derive(Debug, Clone, Default)]
 pub struct TaskState {
@@ -195,6 +245,8 @@ pub struct App {
 
     pub startup_only: bool,
     pub startup_policy: StartupPolicy,
+    pub seniority_policy: SeniorityPolicy,
+    pub level_filter: LevelFilter,
     pub ai_filter: AiFilter,
     pub my_filter: MyFilter,
     pub search: String,
@@ -224,7 +276,11 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(rows: Vec<JobRow>, startup_policy: StartupPolicy) -> Self {
+    pub fn new(
+        rows: Vec<JobRow>,
+        startup_policy: StartupPolicy,
+        seniority_policy: SeniorityPolicy,
+    ) -> Self {
         let mut app = Self {
             rows,
             view: Vec::new(),
@@ -235,6 +291,8 @@ impl App {
             sort_desc: true,
             startup_only: startup_policy.enabled_by_default,
             startup_policy,
+            seniority_policy,
+            level_filter: LevelFilter::Policy,
             ai_filter: AiFilter::All,
             my_filter: MyFilter::All,
             search: String::new(),
@@ -285,6 +343,9 @@ impl App {
                 if self.startup_only && !self.startup_policy.admits(row) {
                     return false;
                 }
+                if !self.level_filter.matches(row, &self.seniority_policy) {
+                    return false;
+                }
                 if !self.ai_filter.matches(row) {
                     return false;
                 }
@@ -323,6 +384,13 @@ impl App {
                     .unwrap_or(u8::MAX)
                     .cmp(&rb.stage.map(|s| s as u8).unwrap_or(u8::MAX)),
                 SortKey::Posted => ra.posted_at.cmp(&rb.posted_at),
+                // Unlabelled last in either direction: it's an absence,
+                // and burying it beats having it head the list.
+                SortKey::Level => ra
+                    .seniority()
+                    .map(|l| l as u8)
+                    .unwrap_or(u8::MAX)
+                    .cmp(&rb.seniority().map(|l| l as u8).unwrap_or(u8::MAX)),
                 SortKey::Status => {
                     status_rank(ra.my_status.as_deref()).cmp(&status_rank(rb.my_status.as_deref()))
                 }
@@ -388,6 +456,33 @@ impl App {
         self.ai_filter = self.ai_filter.next();
         self.recompute();
         self.status = format!("AI filter: {}", self.ai_filter.label());
+    }
+
+    pub fn cycle_level_filter(&mut self) {
+        self.level_filter = self.level_filter.next();
+        self.recompute();
+        // The breakdown rides along with the message because cycling to a
+        // rung is exactly when you want to know how many are there — an
+        // empty "junior" view is otherwise indistinguishable from a broken
+        // filter.
+        let tally = self
+            .level_counts()
+            .iter()
+            .map(|(label, n)| format!("{n} {label}"))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let head = match self.level_filter {
+            LevelFilter::Policy => format!(
+                "level: {} (the filters.yaml policy)",
+                self.seniority_policy.describe()
+            ),
+            other => format!("level: {}", other.label()),
+        };
+        self.status = if tally.is_empty() {
+            head
+        } else {
+            format!("{head}   [{tally}]")
+        };
     }
 
     pub fn cycle_my_filter(&mut self) {
@@ -567,6 +662,23 @@ impl App {
         }
     }
 
+    /// How many rows sit at each rung, for the header.
+    pub fn level_counts(&self) -> Vec<(&'static str, usize)> {
+        Seniority::ALL
+            .iter()
+            .map(|&level| {
+                (
+                    level.short(),
+                    self.rows
+                        .iter()
+                        .filter(|r| r.seniority() == Some(level))
+                        .count(),
+                )
+            })
+            .filter(|(_, n)| *n > 0)
+            .collect()
+    }
+
     pub fn manual_count(&self) -> usize {
         self.rows.iter().filter(|r| r.is_manual()).count()
     }
@@ -656,6 +768,14 @@ mod tests {
         }
     }
 
+    fn level_policy() -> SeniorityPolicy {
+        SeniorityPolicy {
+            min: Seniority::Junior,
+            max: Seniority::Staff,
+            include_unknown: true,
+        }
+    }
+
     fn policy() -> StartupPolicy {
         StartupPolicy {
             enabled_by_default: true,
@@ -674,6 +794,7 @@ mod tests {
                 row("Mystery", Some(70), None),
             ],
             policy(),
+            level_policy(),
         )
     }
 
@@ -738,6 +859,7 @@ mod tests {
                 row("Unscored", None, Some(Stage::Seed)),
             ],
             policy(),
+            level_policy(),
         );
         a.sort = SortKey::Score;
         a.sort_desc = true;
@@ -785,6 +907,7 @@ mod tests {
                 with_status("Applied", Some("applied")),
             ],
             policy(),
+            level_policy(),
         );
         a.sort = SortKey::Status;
         a.sort_desc = false;
@@ -813,6 +936,7 @@ mod tests {
                 with_status("C", None),
             ],
             policy(),
+            level_policy(),
         );
         a.my_filter = MyFilter::Tracked;
         a.recompute();

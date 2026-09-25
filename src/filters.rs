@@ -22,8 +22,8 @@
 use anyhow::{anyhow, Result};
 use regex::Regex;
 
-use crate::config::{FiltersConfig, StartupPolicyConfig};
-use crate::model::{Job, JobRow, Stage};
+use crate::config::{FiltersConfig, SeniorityPolicyConfig, StartupPolicyConfig};
+use crate::model::{Job, JobRow, Seniority, Stage};
 
 /// Compiled, ready-to-apply form of `filters.yaml`.
 pub struct Filters {
@@ -36,6 +36,7 @@ pub struct Filters {
     core_stack: Vec<Regex>,
     truncated_min_chars: usize,
     pub startup: StartupPolicy,
+    pub seniority: SeniorityPolicy,
 }
 
 impl Filters {
@@ -56,6 +57,7 @@ impl Filters {
             core_stack: compile_patterns(&cfg.stack_core, "stack_core")?,
             truncated_min_chars: cfg.truncated_description_min_chars,
             startup: StartupPolicy::from_config(&cfg.startup)?,
+            seniority: SeniorityPolicy::from_config(&cfg.seniority)?,
         })
     }
 
@@ -220,6 +222,79 @@ impl StartupPolicy {
     }
 }
 
+// -------------------------------------------------------- seniority mode
+
+/// Which rungs of the ladder count as in scope.
+///
+/// A separate axis from the startup policy: that one is about the company,
+/// this one is about the role. Both are view-level for the same reason —
+/// everything is stored regardless, so changing either is instant and
+/// needs no re-fetch.
+#[derive(Debug, Clone)]
+pub struct SeniorityPolicy {
+    pub min: Seniority,
+    pub max: Seniority,
+    pub include_unknown: bool,
+}
+
+impl SeniorityPolicy {
+    pub fn from_config(cfg: &SeniorityPolicyConfig) -> Result<Self> {
+        let parse = |raw: &str, field: &str| {
+            Seniority::parse(raw).ok_or_else(|| {
+                anyhow!(
+                    "filters.yaml: seniority.{field} '{raw}' isn't a known level. \
+                     Valid values, lowest first: {}",
+                    Seniority::ALL
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
+        };
+        let min = parse(&cfg.min, "min")?;
+        let max = parse(&cfg.max, "max")?;
+        if min > max {
+            return Err(anyhow!(
+                "filters.yaml: seniority.min ({}) is above seniority.max ({}), \
+                 which admits nothing at all",
+                min.as_str(),
+                max.as_str()
+            ));
+        }
+        Ok(Self {
+            min,
+            max,
+            include_unknown: cfg.include_unknown,
+        })
+    }
+
+    pub fn admits(&self, row: &JobRow) -> bool {
+        // Same exemption as startup mode, for the same reason: a job you
+        // entered by hand was never discovered, so a discovery filter has
+        // no business hiding it.
+        if row.is_manual() {
+            return true;
+        }
+        match row.seniority() {
+            Some(level) => level >= self.min && level <= self.max,
+            None => self.include_unknown,
+        }
+    }
+
+    pub fn describe(&self) -> String {
+        let mut s = if self.min == self.max {
+            self.min.as_str().to_string()
+        } else {
+            format!("{}..{}", self.min.as_str(), self.max.as_str())
+        };
+        if self.include_unknown {
+            s.push_str(", incl. unlabelled");
+        }
+        s
+    }
+}
+
 // ------------------------------------------------------------------ helpers
 
 /// An empty keyword list joins to "" and compiles to "()", which matches
@@ -316,7 +391,8 @@ pub fn collapse_whitespace(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::StartupPolicyConfig;
+    use crate::config::{SeniorityPolicyConfig, StartupPolicyConfig};
+    use crate::model::Seniority;
 
     fn test_filters() -> Filters {
         let cfg = FiltersConfig {
@@ -332,6 +408,7 @@ mod tests {
             stack_core: vec![r"\bgo\b".into(), r"\bkubernetes\b".into()],
             truncated_description_min_chars: 400,
             startup: StartupPolicyConfig::default(),
+            seniority: SeniorityPolicyConfig::default(),
         };
         Filters::compile(&cfg).unwrap()
     }
@@ -486,6 +563,95 @@ mod tests {
             ..manual.clone()
         };
         assert!(!p.admits(&scraped));
+    }
+
+    fn level_row(title: &str) -> JobRow {
+        JobRow {
+            title: title.into(),
+            source: "greenhouse".into(),
+            ..Default::default()
+        }
+    }
+
+    fn level_policy(min: Seniority, max: Seniority, include_unknown: bool) -> SeniorityPolicy {
+        SeniorityPolicy {
+            min,
+            max,
+            include_unknown,
+        }
+    }
+
+    #[test]
+    fn the_level_range_is_inclusive_at_both_ends() {
+        let p = level_policy(Seniority::Junior, Seniority::Senior, false);
+        assert!(p.admits(&level_row("Junior Platform Engineer")));
+        assert!(p.admits(&level_row("Software Engineer II")));
+        assert!(p.admits(&level_row("Senior Platform Engineer")));
+        assert!(!p.admits(&level_row("Engineering Intern")), "below min");
+        assert!(
+            !p.admits(&level_row("Staff Software Engineer")),
+            "above max"
+        );
+    }
+
+    #[test]
+    fn unlabelled_titles_are_governed_by_include_unknown() {
+        let row = level_row("Software Engineer");
+        assert!(level_policy(Seniority::Junior, Seniority::Staff, true).admits(&row));
+        assert!(!level_policy(Seniority::Junior, Seniority::Staff, false).admits(&row));
+    }
+
+    #[test]
+    fn manual_entries_ignore_the_level_policy_too() {
+        // Same reasoning as startup mode: you entered it, so a discovery
+        // filter has no business hiding it.
+        let mut row = level_row("Engineering Manager");
+        row.source = crate::model::MANUAL_SOURCE.into();
+        assert!(level_policy(Seniority::Junior, Seniority::Senior, false).admits(&row));
+    }
+
+    #[test]
+    fn an_inverted_range_is_rejected_rather_than_silently_empty() {
+        let cfg = SeniorityPolicyConfig {
+            min: "staff".into(),
+            max: "junior".into(),
+            include_unknown: true,
+        };
+        let err = SeniorityPolicy::from_config(&cfg).unwrap_err().to_string();
+        assert!(err.contains("admits nothing at all"), "got: {err}");
+    }
+
+    #[test]
+    fn an_unknown_level_name_names_the_valid_ones() {
+        let cfg = SeniorityPolicyConfig {
+            min: "midlevelish".into(),
+            max: "staff".into(),
+            include_unknown: true,
+        };
+        let err = SeniorityPolicy::from_config(&cfg).unwrap_err().to_string();
+        assert!(
+            err.contains("junior"),
+            "error should list the options: {err}"
+        );
+    }
+
+    #[test]
+    fn the_shipped_filters_yaml_still_admits_junior() {
+        let Ok(cfg) = crate::config::load_filters("filters.yaml") else {
+            return; // not run from the repo root
+        };
+        let policy = SeniorityPolicy::from_config(&cfg.seniority).unwrap();
+        assert!(policy.admits(&level_row("Junior Platform Engineer")));
+        // And the level vetoes must have left hard_exclusion_keywords —
+        // leaving them there would drop junior roles at fetch time, where
+        // no view policy can ever get them back.
+        let joined = cfg.hard_exclusion_keywords.join(" ").to_lowercase();
+        for veto in ["junior", "new grad", "entry level"] {
+            assert!(
+                !joined.contains(veto),
+                "{veto:?} is still a fetch-time veto, so the level policy can never see it"
+            );
+        }
     }
 
     #[test]
