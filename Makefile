@@ -1,38 +1,60 @@
 SHELL := /bin/bash
-.DEFAULT_GOAL := run
+.DEFAULT_GOAL := tui
+.PHONY: tui build release install fetch evaluate refilter discover check test fmt clippy web
 
-.PHONY: run test evaluate web
+CARGO ?= cargo
+BIN   := ./target/release/jobsearch
 
-# Interactive wrapper around `python -m app.main` — asks the questions
-# instead of you having to remember the argparse flags.
-run:
-	@companies_flag=""; aggregators_flag=""; discovery_flag=""; company_flag=""; \
-	read -rp "Fetch from companies.yaml? [Y/n] " ans; \
-	[[ "$$ans" =~ ^[Nn] ]] && companies_flag="--skip-companies"; \
-	read -rp "Fetch from aggregators.yaml? [Y/n] " ans; \
-	[[ "$$ans" =~ ^[Nn] ]] && aggregators_flag="--skip-aggregators"; \
-	read -rp "Auto-discover new companies from Adzuna results? [Y/n] " ans; \
-	[[ "$$ans" =~ ^[Nn] ]] && discovery_flag="--skip-discovery"; \
-	read -rp "Only one company slug? (blank = all) " slug; \
-	[[ -n "$$slug" ]] && company_flag="--company $$slug"; \
-	python -m app.main $$companies_flag $$aggregators_flag $$discovery_flag $$company_flag
+# The TUI is the main interface — fetching, scoring and triage are all one
+# keypress from the review list, so the targets below are for cron and
+# scripts more than for daily use.
+tui: build
+	$(CARGO) run --release -- tui
 
-# Automated test suite: pytest-style tests plus the standalone main()-style
-# sanity scripts that print their own pass/fail summary.
+build:
+	$(CARGO) build --release
+
+release: build
+	@echo "Built $(BIN)"
+
+# Put `jobsearch` on your PATH. It reads its config from the current
+# directory, so run it from this repo (or pass --root).
+install:
+	$(CARGO) install --path . --locked
+
+fetch: build
+	$(BIN) fetch
+
+evaluate: build
+	@read -rp "Dry run (no API calls, no cost)? [Y/n] " ans; \
+	read -rp "Limit? (blank = all) " limit; \
+	flags=""; \
+	[[ ! "$$ans" =~ ^[Nn] ]] && flags="$$flags --dry-run"; \
+	[[ -n "$$limit" ]] && flags="$$flags --limit $$limit"; \
+	$(BIN) evaluate $$flags
+
+refilter: build
+	$(BIN) refilter --dry-run
+
+# Pull the YC directory, record stage + headcount for every hiring company,
+# and resolve as many ATS boards as possible. Cached, so re-running only
+# probes companies it hasn't seen.
+discover: build
+	$(BIN) discover-yc
+
+check: build
+	$(BIN) check
+
 test:
-	python -m pytest app/ -q
-	python -m app.tests.test_pipeline
-	python -m app.tests.test_discover_companies
-	python -m app.tests.test_ai_evaluate
+	$(CARGO) test
 
-# Interactive wrapper around `python -m app.ai_evaluate` — asks the questions
-evaluate:
-	@dry_run_flag=""; limit_flag=""; \
-	read -rp "Do you want a dry run? [Y/n] " ans; \
-	[[ ! "$$ans" =~ ^[Nn] ]] && dry_run_flag="--dry-run"; \
-	read -rp "Do you want to set a limit? (blank = all) " limit_val; \
-	[[ -n "$$limit_val" ]] && limit_flag="--limit $$limit_val"; \
-	python -m app.ai_evaluate $$dry_run_flag $$limit_flag
+fmt:
+	$(CARGO) fmt
 
+clippy:
+	$(CARGO) clippy --all-targets -- -D warnings
+
+# The Next.js board is frozen — still works against the same database, but
+# new features land in the TUI only. See web/README.md.
 web:
 	DB_PATH=$(CURDIR)/data/seen_jobs.sqlite3 npm --prefix web run dev

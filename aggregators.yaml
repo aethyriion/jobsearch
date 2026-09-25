@@ -94,3 +94,33 @@ aggregators:
       file shipped with. Remotive asks for max 4 requests/day and max
       2/minute, so keep this to ONE entry per pipeline run. Listings are
       delayed 24h from posting per their terms.
+
+  # --------------------------------------------------------------------
+  # Startup-native sources
+  # --------------------------------------------------------------------
+  - name: Hacker News (Who is hiring)
+    type: hn
+    params:
+      months: 1   # how many monthly threads back to read; 1 is right for a recurring run
+    notes: >
+      The monthly "Ask HN: Who is hiring?" thread, via the public Algolia
+      HN API (no key, no rate limit). Startup-dense by nature: almost every
+      post is a small company hiring directly, very often a founder, which
+      is close to the opposite of a general aggregator where startups are a
+      thin slice under staffing-agency noise. Posts follow a
+      "Company | Role | Location | REMOTE | ..." convention; posts that
+      ignore it entirely are dropped rather than guessed at, and the full
+      comment text always becomes the description so the AI step sees
+      everything a human would. Dedup means re-reading the same thread on a
+      later run costs nothing.
+
+  # Wellfound (formerly AngelList Talent) is the other obvious
+  # startup-native source and is deliberately absent rather than disabled-
+  # with-a-TODO. Its GraphQL endpoint returns 403 behind a Cloudflare
+  # interstitial for any client that doesn't present as a full browser —
+  # and so does robots.txt. Reading it would mean impersonating a browser
+  # specifically to defeat bot protection the site is clearly choosing to
+  # apply, so this tool doesn't. The YC directory (`jobsearch discover-yc`)
+  # plus the HN thread above cover the same ground through interfaces meant
+  # to be read by programs. If you want Wellfound coverage, their email job
+  # alerts into a mailbox you read yourself is the supported path.

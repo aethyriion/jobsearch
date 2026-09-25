@@ -225,7 +225,12 @@ location_allow_patterns:
 # and a Java-shop or C++-shop role isn't the target (see profile.yaml's
 # constraints).
 stack_dealbreakers:
-  - '\bc#\b'
+  # NOTE on trailing \b after a punctuation character: '#' and '+' are not
+  # word characters, so '\bc#\b' requires a word character immediately
+  # after the '#' and therefore never matches "C# developer" or "We use
+  # C#." — it matched nothing at all until 2026-09-25. Leading \b is fine
+  # (space->c IS a boundary); just don't put one on the trailing side.
+  - '\bc#'
   - '\.net\b'
   - '\basp\.net\b'
   - '\bvb\.net\b'
@@ -249,7 +254,7 @@ stack_dealbreakers:
   - '\bandroid\b'
   - '\bios development\b'
   - '\bjava\b'
-  - '\bc\+\+\b'
+  - '\bc\+\+'
   - '\bmatlab\b'
   - '\blabview\b'
 
@@ -308,3 +313,42 @@ stack_core:
 # Below this many characters, a JD is treated as a short aggregator teaser
 # snippet rather than a full posting (see app/filters.py's looks_truncated).
 truncated_description_min_chars: 400
+
+# ---------------------------------------------------------------------------
+# Startup mode
+# ---------------------------------------------------------------------------
+# This is a VIEW policy, not a fetch policy. Everything is fetched, filtered
+# and stored regardless of company stage — so changing anything here takes
+# effect immediately against jobs already in the database, and never needs a
+# re-fetch. Toggle it live in the TUI with `s`.
+#
+# Stage comes from three sources, most trustworthy first:
+#   1. a `stage:` field on a companies.yaml entry (hand-curated)
+#   2. the Y Combinator directory  (`jobsearch discover-yc`)
+#   3. the AI evaluation step, inferring stage from the JD
+# A weaker source never overwrites a stronger one.
+startup:
+  # Whether startup-only is the default view. `s` toggles it at runtime;
+  # `jobsearch evaluate --all-stages` overrides it for one scoring run.
+  enabled: true
+
+  # The latest stage that still counts as a startup, inclusive. Earliest to
+  # latest: pre-seed, seed, series-a, series-b, series-c, growth, public,
+  # big-tech.
+  max_stage: series-c
+
+  # Headcount veto, applied independently of the stage label — a company
+  # calling itself "Series C" with 4,000 people isn't what this mode is for,
+  # and headcount is the harder number to spin. Companies with no known
+  # headcount are judged on stage alone rather than dropped.
+  max_headcount: 600
+
+  # Whether a company whose stage nobody knows survives the filter.
+  #
+  # Start with `true`. Stage coverage is thin until you've run
+  # `jobsearch discover-yc` and a scoring pass or two, and with `false` an
+  # empty startup view looks like a broken filter rather than missing data.
+  # Flip it to `false` once `jobsearch check` shows most companies carrying
+  # a stage — that's when "startup" starts meaning "known to be a startup"
+  # rather than "not known to be big".
+  include_unknown: true
