@@ -64,29 +64,54 @@ entry in `aggregators.yaml` — register a free key at
 [developer.adzuna.com](https://developer.adzuna.com). Remotive needs no
 auth but only covers remote roles.
 
-### Customize for your own search
+### Current configuration
 
-This repo ships pre-configured for the original author's search (Alberta/
-Canada, Python/JS stack). **Before your first run, edit these three
-files** or you'll get zero candidates, or candidates that don't match your
-actual stack:
+Configured on 2026-09-25 for a **remote-US senior/staff platform, DevOps,
+infrastructure and backend search out of Ohio**, from the professional
+content in `~/Developer/aethyriion/aethyriion.dev` (`content/profile.toml`,
+`experience.toml`, `skills.toml`, `projects.toml`, `resume.toml`):
+
+- **`profile.yaml`** — competency-organized profile fed to the AI step.
+  Regenerate/refresh it from those TOML files when they change; it's
+  gitignored.
+- **`filters.yaml`** — titles cover platform/SRE/infrastructure/backend;
+  `hard_exclusion_keywords` (a config key added for this setup) drops
+  intern/junior and manager/director/VP titles *before* the priority-title
+  rescue can save them. Locations allow remote-US (including the
+  "Flexible - USA"/"Distributed"/"USA Only" spellings real boards use),
+  US-inclusive remote regions, and Ohio on-site/hybrid. US on-site
+  *elsewhere* is off by default — there's a commented block to switch it on
+  if relocation is back on the table.
+- **`companies.yaml`** — 129 US/US-remote employers, weighted toward
+  companies whose product is infrastructure. Every slug was verified live
+  against its ATS API on 2026-09-25.
+- **`aggregators.yaml`** — Adzuna US queries (platform/devops/SRE/infra/
+  backend) plus an Ohio-local query, and one Remotive entry.
+- **`.env`** — created from `.env.example`; `ANTHROPIC_API_KEY` and the
+  Adzuna keys still need filling in.
+
+### Re-customizing (for a different search)
+
+The three files that decide whether a run returns anything:
 
 1. **`filters.yaml` → `location_allow_patterns`** — regex patterns for
-   locations to keep. Ships as Canada/Alberta-only; replace with your own
-   country/region/cities, or delete entries to broaden it. This is the
-   #1 reason a first run returns nothing — if nothing you fetch ever
-   matches these patterns, `location_is_allowed()` rejects every job.
+   locations to keep. This is the #1 reason a first run returns nothing —
+   if nothing you fetch ever matches these patterns,
+   `location_is_allowed()` rejects every job. Two traps the current
+   patterns document inline: a bare `\bremote\b` lets in "Remote Poland",
+   and a bare `\bus\b` lets in every US *on-site* role, because
+   SmartRecruiters appends the country code to each location
+   ("Santa Clara, CA, us").
 2. **`filters.yaml` → `stack_dealbreakers` / `stack_core`** — a JD is
    rejected if it mentions a `stack_dealbreakers` language and none of
-   `stack_core`. Ships assuming you want Python/JS and don't want
-   Java/C#/.NET/etc. If your own stack includes one of the "dealbreaker"
+   `stack_core`. If your own stack includes one of the "dealbreaker"
    languages, move it into `stack_core` (or the filter will reject roles
    in your own stack).
-3. **`companies.yaml`** — the company registry. Ships with the original
-   author's real target list; add/remove companies to match who you're
-   actually applying to (see the file's header comment for the format).
-   `aggregators.yaml`'s `where` params are also location-specific —
-   update those too if you're not targeting Alberta/Canada.
+3. **`companies.yaml`** — add/remove companies to match who you're actually
+   applying to (see the file's header comment for the format).
+   `aggregators.yaml`'s `where` and `country` params are location-specific —
+   update those too. `country` is Adzuna's country code, which goes in the
+   URL path rather than the query string (default `us`).
 
 ## Usage
 
@@ -148,7 +173,8 @@ Thin wrappers over the commands above — run from the repo root:
   a company here once you've identified its ATS.
 - **`aggregators.yaml`** — aggregator search config (keywords, location,
   pagination limits).
-- **`filters.yaml`** — title allowlist/exclusion keywords, location
+- **`filters.yaml`** — hard-exclusion keywords (level/track vetoes applied
+  before anything else), title allowlist/exclusion keywords, location
   allowlist patterns, and JD stack-dealbreaker/core-stack keywords. Edit
   this directly as you refine what counts as in-scope for you — no code
   changes needed (matching logic lives in `app/filters.py`).

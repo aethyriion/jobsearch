@@ -2,629 +2,431 @@
 # ats: one of "greenhouse" | "ashby" | "workable" | "lever" | "smartrecruiters"
 # slug: the identifier used in that ATS's public API URL
 #
-# The list below is the original author's real target list (Alberta/Canada
-# tech companies), kept as-is as a working example of the format. Add or
-# remove entries to match who you're actually applying to — see the
-# README's "Customize for your own search" section.
+# Rebuilt 2026-09-25 for a remote-US platform/DevOps/infrastructure search.
+# The list that shipped with the repo was the original author's Alberta/
+# Canada target list; the Canada-only employers there have been dropped
+# (they'd be rejected by filters.yaml's US location patterns anyway) and
+# replaced with US/US-remote employers, weighted toward companies whose
+# product IS infrastructure — those post the platform, SRE and
+# infrastructure roles that match profile.yaml best. The original list is
+# still in git history if you want any of it back.
+#
+# EVERY slug below was verified against its ATS's public API on 2026-09-25
+# and returned at least one live posting. Slugs do rot (a board gets
+# renamed, a company switches ATS), so if one goes quiet, check it with:
+#     python -m app.main --company <slug>
+#
+# Note on Ohio-local employers: the big ones (Nationwide, Cardinal Health,
+# Progressive, Hyland, CoverMyMeds) run Workday or iCIMS, which this
+# pipeline has no fetcher for — they are not omitted by choice. The
+# "Adzuna (Ohio, software engineer)" aggregator entry is what covers them.
+#
+# app/discover_companies.py appends newly-resolved companies to the bottom
+# of this file automatically after an aggregator run.
 
 companies:
-  - name: Affirm
+  # ------------------------------------------------------------------
+  # Infrastructure, platform & developer tooling — the primary targets.
+  # Their engineering orgs are mostly the kind of work in profile.yaml's
+  # kubernetes_and_cloud_platform / infrastructure_as_code competencies.
+  # ------------------------------------------------------------------
+  - name: Cloudflare
     ats: greenhouse
-    slug: affirm
-  - name: Fleetworthy (Bestpass)
+    slug: cloudflare
+  - name: Datadog
     ats: greenhouse
-    slug: bestpass
-  - name: Snorkel AI
+    slug: datadog
+  - name: GitLab
     ats: greenhouse
-    slug: snorkelai
-  - name: Narvar
+    slug: gitlab
+  - name: Grafana Labs
     ats: greenhouse
-    slug: narvar
-  - name: Coveo
+    slug: grafanalabs
+  - name: Databricks
     ats: greenhouse
-    slug: coveoen   # corrected 2026-08-10: "coveodeven" was a dev/test board with 1 fake job; "coveoen" is production (55 real postings confirmed)
-  - name: Procurify
-    ats: ashby
-    slug: procurify
-  - name: Vanta
-    ats: ashby
-    slug: vanta
-  - name: Treewalk
-    ats: workable
-    slug: treewalk   # confirmed via apply.workable.com/api/v1/widget/accounts/treewalk — currently 0 open jobs
-  - name: Seequent
-    ats: workable
-    slug: seequent
-
-  # Added from Edmonton/Calgary AB job listing scan (2026-08-10)
-  - name: AltaML
-    ats: lever
-    slug: altaml
-  - name: LawDepot
-    ats: ashby
-    slug: lawdepot
+    slug: databricks
+  - name: Elastic
+    ats: greenhouse
+    slug: elastic
+  - name: Fastly
+    ats: greenhouse
+    slug: fastly
+  - name: Netlify
+    ats: greenhouse
+    slug: netlify
+  - name: Vercel
+    ats: greenhouse
+    slug: vercel
+  - name: PlanetScale
+    ats: greenhouse
+    slug: planetscale
+  - name: Cockroach Labs
+    ats: greenhouse
+    slug: cockroachlabs
+  - name: Honeycomb
+    ats: greenhouse
+    slug: honeycomb
+  - name: LaunchDarkly
+    ats: greenhouse
+    slug: launchdarkly
+  - name: Cribl
+    ats: greenhouse
+    slug: cribl
+  - name: JFrog
+    ats: greenhouse
+    slug: jfrog
+  - name: Starburst
+    ats: greenhouse
+    slug: starburst
+  - name: Backblaze
+    ats: greenhouse
+    slug: backblaze
+  - name: Buildkite
+    ats: greenhouse
+    slug: buildkite
+  - name: Gremlin
+    ats: greenhouse
+    slug: gremlin
+  - name: Tigera (Calico)
+    ats: greenhouse
+    slug: tigera
+  - name: CircleCI
+    ats: greenhouse
+    slug: circleci
+  - name: Chainguard
+    ats: greenhouse
+    slug: chainguard
+  - name: Tailscale
+    ats: greenhouse
+    slug: tailscale
   - name: MongoDB
     ats: greenhouse
     slug: mongodb
-  - name: Cloudbeds
+  - name: Fivetran
     ats: greenhouse
-    slug: cloudbeds
-  - name: StackAdapt
-    ats: greenhouse
-    slug: stackadapt
-  - name: Hootsuite
-    ats: greenhouse
-    slug: hootsuite
-  - name: Speechify
-    ats: greenhouse
-    slug: speechify
-
-  # Auto-discovered via Adzuna aggregator + full-JD fetch
-  - name: Achievers
-    ats: lever
-    slug: achievers
-  - name: Air-tek
-    ats: lever
-    slug: air-tek
-  - name: AlayaCare
-    ats: greenhouse
-    slug: alayacare
-  - name: Alpaca
-    ats: greenhouse
-    slug: alpaca
-
-  # extended from Claude
-  - name: Wealthsimple
+    slug: fivetran
+  - name: Docker
     ats: ashby
-    slug: wealthsimple
-  - name: Thinkific
+    slug: docker
+  - name: Temporal
     ats: ashby
-    slug: thinkific
-  - name: Ada
-    ats: greenhouse
-    slug: ada18
-  - name: Wattpad
-    ats: lever
-    slug: wattpad
-  - name: Ritual
-    ats: lever
-    slug: ritual
-  - name: League
-    ats: greenhouse
-    slug: leagueinc
-  - name: Loopio
+    slug: temporal
+  - name: Supabase
     ats: ashby
-    slug: loopio
+    slug: supabase
+  - name: Render
+    ats: ashby
+    slug: render
+  - name: Railway
+    ats: ashby
+    slug: railway
+  - name: Neon
+    ats: ashby
+    slug: neon
+  - name: Coder
+    ats: ashby
+    slug: coder
+  - name: Depot
+    ats: ashby
+    slug: depot
+  - name: Prefect
+    ats: ashby
+    slug: prefect
+  - name: PostHog
+    ats: ashby
+    slug: posthog
+  - name: Resend
+    ats: ashby
+    slug: resend
+  - name: Warp
+    ats: ashby
+    slug: warp
+  - name: Zed
+    ats: ashby
+    slug: zed
+  - name: Clerk
+    ats: ashby
+    slug: clerk
+  - name: Linear
+    ats: ashby
+    slug: linear
   - name: 1Password
     ats: ashby
     slug: 1password
-  - name: Borrowell
-    ats: workable
-    slug: borrowell
-  - name: Achievers
+  - name: Sysdig
     ats: lever
-    slug: achievers
-  - name: BenchSci
-    ats: lever
-    slug: benchsci
+    slug: sysdig
+
+  # ------------------------------------------------------------------
+  # AI / ML platforms — the closest match to the Hewmen AI data platform
+  # work (ai_platform_infrastructure in profile.yaml).
+  # ------------------------------------------------------------------
+  - name: Anthropic
+    ats: greenhouse
+    slug: anthropic
+  - name: Scale AI
+    ats: greenhouse
+    slug: scaleai
+  - name: Snorkel AI
+    ats: greenhouse
+    slug: snorkelai
+  - name: OpenAI
+    ats: ashby
+    slug: openai
   - name: Cohere
     ats: ashby
     slug: cohere
-  - name: Tucows
-    ats: greenhouse
-    slug: tucows
-  - name: KOHO
+  - name: Modal
     ats: ashby
-    slug: koho
-  - name: Deep Genomics
-    ats: lever
-    slug: deepgenomics
-  - name: Konrad Group
-    ats: smartrecruiters
-    slug: KonradGroup
-  - name: Sortable
+    slug: modal
+  - name: Baseten
     ats: ashby
-    slug: sortable
-  - name: PointClickCare
-    ats: lever
-    slug: pointclickcare
-  - name: Super.com
+    slug: baseten
+  - name: Fireworks AI
     ats: ashby
-    slug: super.com
-  - name: Clearco
+    slug: fireworks
+  - name: RunPod
     ats: ashby
-    slug: clearco
-  - name: Tilt
+    slug: runpod
+  - name: Ideogram
     ats: ashby
-    slug: tilt
-  - name: Hootsuite
-    ats: greenhouse
-    slug: hootsuite
-  - name: Later
-    ats: greenhouse
-    slug: later
-  - name: Certn
-    ats: workable
-    slug: certn
-  - name: Visier
-    ats: greenhouse
-    slug: visiersolutionsinc
-  - name: Trulioo
-    ats: greenhouse
-    slug: trulioo
-  - name: Blackbird Interactive
-    ats: lever
-    slug: blackbirdinteractive
-  - name: Unbounce
-    ats: greenhouse
-    slug: unbounce
-  - name: Procurify
+    slug: ideogram
+  - name: Cantina
     ats: ashby
-    slug: procurify
-  - name: Klue
-    ats: ashby
-    slug: klue
-  - name: AbCellera
+    slug: cantina
+
+  # ------------------------------------------------------------------
+  # Product companies with large platform / infrastructure orgs.
+  # ------------------------------------------------------------------
+  - name: Stripe
     ats: greenhouse
-    slug: abcellera
-  - name: Zafin
+    slug: stripe
+  - name: Figma
     ats: greenhouse
-    slug: zafinlabsamericasinc
-  - name: Arc'teryx
-    ats: lever
-    slug: arcteryx.com
-  - name: Lightspeed Commerce
-    ats: ashby
-    slug: lightspeedhq
-  - name: TrackTik
-    ats: lever
-    slug: tracktik
-  - name: TandemLaunch
+    slug: figma
+  - name: Okta
     ats: greenhouse
-    slug: tandemlaunch
-  - name: AON3D
+    slug: okta
+  - name: Samsara
     ats: greenhouse
-    slug: aon3d
-  - name: Workleap
+    slug: samsara
+  - name: Pinterest
     ats: greenhouse
-    slug: workleap
-  - name: Poka
+    slug: pinterest
+  - name: Lyft
     ats: greenhouse
-    slug: poka
-  - name: Quadbridge
+    slug: lyft
+  - name: Reddit
     ats: greenhouse
-    slug: quadbridge
-  - name: AlayaCare
+    slug: reddit
+  - name: Discord
     ats: greenhouse
-    slug: alayacare
-  - name: Coveo
+    slug: discord
+  - name: Twilio
     ats: greenhouse
-    slug: coveodeven
-  - name: Hopper
-    ats: ashby
-    slug: hopper
-  - name: SSENSE
-    ats: smartrecruiters
-    slug: ssense1
-  - name: Behaviour Interactive
-    ats: smartrecruiters
-    slug: BehaviourInteractive
-  - name: Vention
-    ats: smartrecruiters
-    slug: Vention
-  - name: Behavox
+    slug: twilio
+  - name: Robinhood
     ats: greenhouse
-    slug: behavox
-  - name: OSEDEA
-    ats: lever
-    slug: osedea
-  - name: Aylo
+    slug: robinhood
+  - name: Coinbase
     ats: greenhouse
-    slug: aylo
-  - name: Fullscript
-    ats: lever
-    slug: fullscript
-  - name: Magnet Forensics
-    ats: lever
-    slug: magnetforensics
-  - name: Attabotics
-    ats: lever
-    slug: attabotics
-  - name: AltaML
-    ats: lever
-    slug: altaml
-  - name: D2L
+    slug: coinbase
+  - name: Asana
     ats: greenhouse
-    slug: d2l
-  - name: Auvik Networks
+    slug: asana
+  - name: Affirm
     ats: greenhouse
-    slug: auviknetworks
-  - name: Miovision
-    ats: ashby
-    slug: miovision
-  - name: Jobber
-    ats: ashby
-    slug: jobber
-  - name: Solink
-    ats: ashby
-    slug: solink
-  - name: Neo Financial
-    ats: ashby
-    slug: neofinancial
-  - name: Benevity
-    ats: ashby
-    slug: benevity
-  - name: Klipfolio
-    ats: workable
-    slug: klipfolio
-  - name: Assent
-    ats: smartrecruiters
-    slug: Assent
-  - name: Coconut Software
+    slug: affirm
+  - name: Brex
     ats: greenhouse
-    slug: coconutsoftware
-  - name: Top Hat
-    ats: ashby
-    slug: top-hat
-  - name: SkipTheDishes
-    ats: smartrecruiters
-    slug: SkipTheDishes
-  - name: Wave
-    ats: lever
-    slug: waveapps
-  - name: TouchBistro
+    slug: brex
+  - name: Gusto
     ats: greenhouse
-    slug: touchbistro
-  - name: Float
-    ats: workable
-    slug: floatjobs
-  - name: Waabi
-    ats: lever
-    slug: waabi
-  - name: Sonrai Security
-    ats: lever
-    slug: sonrai-security
-  - name: Zensurance
-    ats: lever
-    slug: zensurance
-  - name: PolicyMe
-    ats: lever
-    slug: policyme
-  - name: Plooto
+    slug: gusto
+  - name: Duolingo
     ats: greenhouse
-    slug: plootocareers
-  - name: Perch
-    ats: ashby
-    slug: myperch
-  - name: Flinks
-    ats: workable
-    slug: flinks
-  - name: Shakepay
+    slug: duolingo
+  - name: Squarespace
     ats: greenhouse
-    slug: shakepay
-  - name: NDAX
-    ats: workable
-    slug: ndax
-  - name: Maple
-    ats: lever
-    slug: getmaple
-  - name: Cloud DX
-    ats: smartrecruiters
-    slug: CloudDXInc
-  - name: Explorance
-    ats: bamboohr
-    slug: explorance
-  - name: Skillsoft
+    slug: squarespace
+  - name: Amplitude
     ats: greenhouse
-    slug: skillsoft
-  - name: Prodigy Education
-    ats: ashby
-    slug: prodigy-education
-  - name: Digital Extremes
+    slug: amplitude
+  - name: Webflow
     ats: greenhouse
-    slug: digitalextremes
-  - name: A Thinking Ape
+    slug: webflow
+  - name: Airtable
     ats: greenhouse
-    slug: athinkingape
-  - name: OverActive Media
-    ats: workable
-    slug: overactive-media-corp
-  - name: Semios
-    ats: workable
-    slug: semios
-  - name: Knix
-    ats: lever
-    slug: knix
+    slug: airtable
+  - name: Braze
+    ats: greenhouse
+    slug: braze
+  - name: GoDaddy
+    ats: greenhouse
+    slug: godaddy
+  - name: ZoomInfo
+    ats: greenhouse
+    slug: zoominfo
+  - name: AlphaSense
+    ats: greenhouse
+    slug: alphasense
+  - name: Apollo.io
+    ats: greenhouse
+    slug: apolloio
+  - name: Dialpad
+    ats: greenhouse
+    slug: dialpad
+  - name: Diligent
+    ats: greenhouse
+    slug: diligent
+  - name: Coalition
+    ats: greenhouse
+    slug: coalition
+  - name: Lithic
+    ats: greenhouse
+    slug: lithic
+  - name: NexHealth
+    ats: greenhouse
+    slug: nexhealth
+  - name: Babylist
+    ats: greenhouse
+    slug: babylist
+  - name: Cloudbeds
+    ats: greenhouse
+    slug: cloudbeds
   - name: Faire
     ats: greenhouse
     slug: faire
-  - name: Flashfood
+  - name: Alpaca
     ats: greenhouse
-    slug: flashfood
-  - name: GeoComply
-    ats: lever
-    slug: geocomply-2
-  - name: Kasada
-    ats: lever
-    slug: kasada
-  - name: 7shifts
-    ats: greenhouse
-    slug: 7shifts
-  - name: Rewind
-    ats: ashby
-    slug: rewind
-  - name: ClearRisk
-    ats: bamboohr
-    slug: clearrisk
-
-  # Auto-discovered via Adzuna aggregator + full-JD fetch
-  - name: "Aktion Associates"
-    ats: workable
-    slug: aktion-associates
-  - name: "AlphaSense"
-    ats: greenhouse
-    slug: alphasense
-  - name: "Apollo.io"
-    ats: greenhouse
-    slug: apolloio
-  - name: "Arista Networks"
-    ats: smartrecruiters
-    slug: aristanetworks
-  - name: "Asana"
-    ats: greenhouse
-    slug: asana
-  - name: "AutoScout24"
-    ats: greenhouse
-    slug: autoscout24
-  - name: "Babylist"
-    ats: greenhouse
-    slug: babylist
-  - name: "Bankjoy"
-    ats: ashby
-    slug: bankjoy
-  - name: "Blend360"
-    ats: smartrecruiters
-    slug: blend360
-  - name: "Boosted.ai"
-    ats: greenhouse
-    slug: boostedai
-  - name: "Braze"
-    ats: greenhouse
-    slug: braze
-  - name: "BuildOps"
-    ats: greenhouse
-    slug: buildops
-  - name: "Cantina"
-    ats: ashby
-    slug: cantina
-  - name: "Chainguard"
-    ats: greenhouse
-    slug: chainguard
-  - name: "CircleCI"
-    ats: greenhouse
-    slug: circleci
-  - name: "Clutch Technologies"
-    ats: greenhouse
-    slug: clutch
-  - name: "Coalition"
-    ats: greenhouse
-    slug: coalition
-  - name: "Cority"
-    ats: lever
-    slug: cority
-  - name: "Deep Sky"
-    ats: lever
-    slug: deepsky
-  - name: "Dialpad"
-    ats: greenhouse
-    slug: dialpad
-  - name: "Diligent"
-    ats: greenhouse
-    slug: diligent
-  - name: "Docker"
-    ats: ashby
-    slug: docker
-  - name: "Doppel"
-    ats: greenhouse
-    slug: doppel
-  - name: "Doppel"
-    ats: ashby
-    slug: doppel
-  - name: "Elation Health"
-    ats: greenhouse
-    slug: elationhealth
-  - name: "Emburse"
-    ats: lever
-    slug: emburse
-  - name: "Evismart"
-    ats: greenhouse
-    slug: evismart
-  - name: "Fable"
-    ats: ashby
-    slug: fable
-  - name: "Fincentify"
-    ats: ashby
-    slug: fincentify
-  - name: "Fivetran"
-    ats: greenhouse
-    slug: fivetran
-  - name: "GoDaddy"
-    ats: greenhouse
-    slug: godaddy
-  - name: "Hiive"
-    ats: ashby
-    slug: hiive
-  - name: "Ideogram"
-    ats: ashby
-    slug: ideogram
-  - name: "Indie Semiconductor"
-    ats: greenhouse
-    slug: indiesemiconductor
-  - name: "Intellistack"
-    ats: ashby
-    slug: intellistack
-  - name: "Jetson Home"
-    ats: greenhouse
-    slug: jetsonhome
-  - name: "Jobgether"
-    ats: lever
-    slug: jobgether
-  - name: "Kaseya"
+    slug: alpaca
+  - name: Kaseya
     ats: greenhouse
     slug: kaseya
-  - name: "Kogniz"
-    ats: lever
-    slug: kogniz
-  - name: "Lithic"
-    ats: greenhouse
-    slug: lithic
-  - name: "Lyft"
-    ats: greenhouse
-    slug: lyft
-  - name: "MLabs"
-    ats: workable
-    slug: mlabs
-  - name: "Magical"
-    ats: ashby
-    slug: magical
-  - name: "Marble Technology"
-    ats: ashby
-    slug: marble
-  - name: "Maxima"
-    ats: ashby
-    slug: maxima
-  - name: "Maxima"
-    ats: smartrecruiters
-    slug: maxima
-  - name: "Meow"
-    ats: ashby
-    slug: meow
-  - name: "Motus"
-    ats: greenhouse
-    slug: motus
-  - name: "Mycroft"
-    ats: ashby
-    slug: mycroft
-  - name: "NexHealth"
-    ats: greenhouse
-    slug: nexhealth
-  - name: "Nubank"
-    ats: ashby
-    slug: nubank
-  - name: "Nylas"
-    ats: ashby
-    slug: nylas
-  - name: "Okta"
-    ats: greenhouse
-    slug: okta
-  - name: "OpenLoop Health"
-    ats: ashby
-    slug: openloophealth
-  - name: "Outschool"
-    ats: greenhouse
-    slug: outschool
-  - name: "Outschool"
-    ats: ashby
-    slug: outschool
-  - name: "PSL"
-    ats: greenhouse
-    slug: psl
-  - name: "Parkland"
-    ats: greenhouse
-    slug: parkland
-  - name: "Passage"
-    ats: ashby
-    slug: passage
-  - name: "Pinterest"
-    ats: greenhouse
-    slug: pinterest
-  - name: "PolicyMe"
-    ats: lever
-    slug: policyme
-  - name: "Promise Robotics"
-    ats: lever
-    slug: promiserobotics
-  - name: "Ravenwake Games"
-    ats: greenhouse
-    slug: ravenwakegames
-  - name: "Relay"
-    ats: ashby
-    slug: relay
-  - name: "Relay"
-    ats: lever
-    slug: relay
-  - name: "Resmed"
-    ats: smartrecruiters
-    slug: resmed
-  - name: "Revic"
-    ats: ashby
-    slug: revic
-  - name: "Robinhood"
-    ats: greenhouse
-    slug: robinhood
-  - name: "SIA"
-    ats: smartrecruiters
-    slug: sia
-  - name: "Samsara"
-    ats: greenhouse
-    slug: samsara
-  - name: "Shakepay"
-    ats: greenhouse
-    slug: shakepay
-  - name: "ShyftLabs"
-    ats: lever
-    slug: shyftlabs
-  - name: "Smart"
-    ats: smartrecruiters
-    slug: smart
-  - name: "Sophos"
-    ats: lever
-    slug: sophos
-  - name: "Spaceium"
-    ats: greenhouse
-    slug: spaceium
-  - name: "Syndio"
-    ats: greenhouse
-    slug: syndio
-  - name: "Synechron"
-    ats: smartrecruiters
-    slug: synechron
-  - name: "TELUS Digital"
-    ats: ashby
-    slug: telus-digital
-  - name: "TTEC Digital"
-    ats: lever
-    slug: ttecdigital
-  - name: "Tailscale"
-    ats: greenhouse
-    slug: tailscale
-  - name: "Tailwind"
-    ats: ashby
-    slug: tailwind
-  - name: "Terminal"
-    ats: ashby
-    slug: terminal
-  - name: "Thanx"
-    ats: greenhouse
-    slug: thanx
-  - name: "Unblocked"
-    ats: ashby
-    slug: unblocked
-  - name: "Varicent"
-    ats: greenhouse
-    slug: varicent
-  - name: "Veracode"
+  - name: Veracode
     ats: greenhouse
     slug: veracode
-  - name: "Xsolla"
+  - name: Speechify
+    ats: greenhouse
+    slug: speechify
+  - name: StackAdapt
+    ats: greenhouse
+    slug: stackadapt
+  - name: BuildOps
+    ats: greenhouse
+    slug: buildops
+  - name: Clutch Technologies
+    ats: greenhouse
+    slug: clutch
+  - name: Elation Health
+    ats: greenhouse
+    slug: elationhealth
+  - name: Motus
+    ats: greenhouse
+    slug: motus
+  - name: Syndio
+    ats: greenhouse
+    slug: syndio
+  - name: Thanx
+    ats: greenhouse
+    slug: thanx
+  - name: Outschool
+    ats: greenhouse
+    slug: outschool
+  - name: Fleetworthy (Bestpass)
+    ats: greenhouse
+    slug: bestpass
+  - name: Narvar
+    ats: greenhouse
+    slug: narvar
+  - name: indie Semiconductor
+    ats: greenhouse
+    slug: indiesemiconductor
+  - name: Skillsoft
+    ats: greenhouse
+    slug: skillsoft
+  - name: Behavox
+    ats: greenhouse
+    slug: behavox
+  - name: Vanta
+    ats: ashby
+    slug: vanta
+  - name: Notion
+    ats: ashby
+    slug: notion
+  - name: Ramp
+    ats: ashby
+    slug: ramp
+  - name: Nylas
+    ats: ashby
+    slug: nylas
+  - name: Passage
+    ats: ashby
+    slug: passage
+  - name: Terminal
+    ats: ashby
+    slug: terminal
+  - name: Relay
+    ats: ashby
+    slug: relay
+  - name: Unblocked
+    ats: ashby
+    slug: unblocked
+  - name: Magical
+    ats: ashby
+    slug: magical
+  - name: Marble Technology
+    ats: ashby
+    slug: marble
+  - name: Intellistack
+    ats: ashby
+    slug: intellistack
+  - name: Bankjoy
+    ats: ashby
+    slug: bankjoy
+  - name: OpenLoop Health
+    ats: ashby
+    slug: openloophealth
+  - name: Doppel
+    ats: ashby
+    slug: doppel
+  - name: Sophos
+    ats: lever
+    slug: sophos
+  - name: Xsolla
     ats: lever
     slug: xsolla
-  - name: "ZoomInfo"
-    ats: greenhouse
-    slug: zoominfo
-  - name: "hireVouch"
+  - name: Emburse
     ats: lever
-    slug: hirevouch
+    slug: emburse
   - name: Agiloft
     ats: lever
     slug: agiloft
+  - name: ShyftLabs
+    ats: lever
+    slug: shyftlabs
+  - name: TTEC Digital
+    ats: lever
+    slug: ttecdigital
+  - name: Arista Networks
+    ats: smartrecruiters
+    slug: aristanetworks
+  - name: Blend360
+    ats: smartrecruiters
+    slug: blend360
+  - name: Synechron
+    ats: smartrecruiters
+    slug: synechron
+  - name: ResMed
+    ats: smartrecruiters
+    slug: resmed
+
+  # ------------------------------------------------------------------
+  # Ohio / Midwest — on-site or hybrid within range of Columbus.
+  # ------------------------------------------------------------------
+  - name: Path Robotics (Columbus, OH)
+    ats: greenhouse
+    slug: pathrobotics
+  - name: Aktion Associates (Maumee, OH)
+    ats: workable
+    slug: aktion-associates

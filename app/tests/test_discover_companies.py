@@ -26,7 +26,7 @@ def main():
     # re-suggested, even with a different display-name casing from Adzuna ---
     known = discover_companies.load_known_keys(TEST_YAML)
     assert ("greenhouse", "affirm") in known
-    assert ("workable", "treewalk") in known
+    assert ("workable", "aktion-associates") in known
     print(f"load_known_keys OK: {len(known)} pairs loaded")
 
     discovered = [
@@ -48,7 +48,8 @@ def main():
         new_text = f.read()
     assert new_text.startswith(original_text), "existing file content was modified, not just appended to"
     assert "# Company registry for the job discovery pipeline." in new_text  # header comment survived
-    assert "coveodeven" in new_text or "corrected 2026-08-10" in new_text  # provenance comment survived
+    # a mid-file section comment, not just the header, must survive the append
+    assert "# Infrastructure, platform & developer tooling" in new_text
     print("File comments/formatting preserved OK")
 
     # --- the whole file (original + appended block) must still be valid,

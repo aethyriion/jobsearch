@@ -5,51 +5,92 @@
 #
 # type: one of "adzuna" | "remotive"
 # params: passed straight through to that aggregator's search API, EXCEPT
-#   max_pages (adzuna only) — a pipeline-level control consumed by
-#   fetch_adzuna() before building the request, not sent to Adzuna itself.
+#   two pipeline-level controls consumed by fetch_adzuna() before the
+#   request is built, not sent to Adzuna itself:
+#     max_pages — how many result pages to walk (default 5)
+#     country   — Adzuna's country code, which is part of the URL path
+#                 rather than a query param (default "us")
 #
-# EDIT ME: every Adzuna entry's `where` below is Alberta/Canada (the
-# original author's search) and `what` targets their keywords/stack.
-# Replace both with your own location and role keywords — and make sure
-# they match filters.yaml's location_allow_patterns/stack_core, or a real
-# result will still get filtered out downstream.
+# Configured 2026-09-25 for a remote-US platform/DevOps/backend search out
+# of Ohio. Keep `what`/`where` here in sync with filters.yaml's
+# location_allow_patterns and stack_core, or a real result will still get
+# dropped downstream.
 
 aggregators:
-  - name: Adzuna (Canada, software engineer)
+  - name: Adzuna (US, platform engineer)
     type: adzuna
     params:
-      what: "software engineer"
-      where: "Alberta"
+      what: "platform engineer"
+      where: "United States"
+      country: us
       results_per_page: 50
       max_pages: 5   # up to 250 results; stops early if a page comes back short
     notes: >
       Requires free app_id/app_key from https://developer.adzuna.com (instant
       signup, no approval wait per their docs — exact rate limit wasn't
       confirmed in research, check your account dashboard after signup).
-      Set ADZUNA_APP_ID / ADZUNA_APP_KEY as environment variables.
+      Set ADZUNA_APP_ID / ADZUNA_APP_KEY in .env.
 
-  - name: Adzuna (Canada, remote backend/fullstack)
+  - name: Adzuna (US, devops engineer)
     type: adzuna
     params:
-      what: "backend engineer OR full stack"
-      where: "Canada"
+      what: "devops engineer"
+      where: "United States"
+      country: us
       results_per_page: 50
       max_pages: 5
 
-  - name: Adzuna (Canada, remote senior software engineer)
+  - name: Adzuna (US, site reliability engineer)
+    type: adzuna
+    params:
+      what: "site reliability engineer"
+      where: "United States"
+      country: us
+      results_per_page: 50
+      max_pages: 3
+
+  - name: Adzuna (US, infrastructure engineer kubernetes)
+    type: adzuna
+    params:
+      what: "infrastructure engineer kubernetes"
+      where: "United States"
+      country: us
+      results_per_page: 50
+      max_pages: 3
+
+  - name: Adzuna (US, backend engineer Rust or Go)
+    type: adzuna
+    params:
+      what: "backend engineer rust OR golang"
+      where: "United States"
+      country: us
+      results_per_page: 50
+      max_pages: 3
+
+  - name: Adzuna (Ohio, software engineer — local on-site/hybrid)
     type: adzuna
     params:
       what: "software engineer"
-      where: "Canada"
+      where: "Ohio"
+      country: us
       results_per_page: 50
-      max_pages: 1
+      max_pages: 3
+    notes: >
+      The local half of the search: Ohio on-site/hybrid roles, matching
+      filters.yaml's Ohio location patterns. The remote-US entries above
+      won't reliably surface these, since their location strings are city
+      names rather than "United States".
 
-  - name: Remotive (software-dev category)
+  - name: Remotive (remote-only feed)
     type: remotive
     params:
-      category: "software-dev"
+      category: "software-development"
     notes: >
-      No auth needed. Remote-only listings (won't catch Alberta on-site
-      roles). Remotive asks for max 4 requests/day and max 2/minute — keep
-      this to one call per pipeline run. Listings are delayed 24h from
-      posting per their terms.
+      No auth needed, remote-only listings. Two caveats confirmed against
+      the live API on 2026-09-25: the public feed currently ignores
+      `category` (it returns the same ~19-job set whatever you pass, so the
+      param is kept only for documentation/future-proofing), and the
+      category slug is "software-development" — not the "software-dev" this
+      file shipped with. Remotive asks for max 4 requests/day and max
+      2/minute, so keep this to ONE entry per pipeline run. Listings are
+      delayed 24h from posting per their terms.
