@@ -22,10 +22,12 @@
 //! mutex that would serialize the UI's reads behind the fetch's writes.
 
 pub mod app;
+pub mod form;
 pub mod ui;
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -120,6 +122,21 @@ async fn event_loop(
             Tick::Input(Event::Key(key)) if key.kind == KeyEventKind::Press => {
                 handle_key(app, store, filters, paths, key, &task_tx)?;
             }
+            // A bracketed paste arrives as one event rather than as a
+            // burst of synthetic keystrokes — which is what makes pasting
+            // a multi-KB job description instant, and stops a stray
+            // character inside it being read as a command.
+            Tick::Input(Event::Paste(text)) => match app.mode {
+                Mode::Form => {
+                    if let Some(form) = &mut app.form {
+                        form.insert_str(&text);
+                    }
+                }
+                Mode::Search | Mode::Notes => {
+                    app.input.push_str(text.replace(['\n', '\r'], " ").trim());
+                }
+                _ => {}
+            },
             Tick::Input(Event::Resize(_, _)) => {}
             Tick::Input(_) => continue,
             Tick::Task(msg) => apply_task_message(app, store, msg)?,
@@ -254,6 +271,20 @@ fn handle_key(
             app.mode = Mode::Normal;
             return Ok(());
         }
+        Mode::Form => {
+            handle_form_key(app, store, key)?;
+            return Ok(());
+        }
+        Mode::ConfirmDelete => {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => app.delete_selected(store)?,
+                _ => {
+                    app.mode = Mode::Normal;
+                    app.status = "not deleted".into();
+                }
+            }
+            return Ok(());
+        }
         Mode::Normal => {}
     }
 
@@ -312,6 +343,16 @@ fn handle_key(
             let index = c.to_digit(10).unwrap() as usize - 1;
             if let Some(status) = App::status_key(index) {
                 app.set_status(store, Some(status))?;
+            }
+        }
+
+        KeyCode::Char('a') => app.open_add_form(),
+        KeyCode::Char('E') => app.open_edit_form(),
+        KeyCode::Char('D') => {
+            if app.selected_row().is_some_and(|r| r.is_manual()) {
+                app.mode = Mode::ConfirmDelete;
+            } else {
+                app.status = "only hand-entered rows can be deleted".into();
             }
         }
 
@@ -465,6 +506,49 @@ fn spawn_evaluate(
     });
 }
 
+/// Keys inside the manual-entry form.
+///
+/// Ctrl+S saves rather than Enter: Enter has to stay available as a
+/// newline in the description, and a form you can't put a blank line in is
+/// a form you can't paste a real job posting into.
+fn handle_form_key(app: &mut App, store: &Store, key: KeyEvent) -> Result<()> {
+    use crate::tui::form::FieldKind;
+
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Char('s') if ctrl => {
+            app.save_form(store)?;
+            return Ok(());
+        }
+        KeyCode::Esc => {
+            app.cancel_form();
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    let Some(form) = &mut app.form else {
+        return Ok(());
+    };
+    let kind = form.focused().kind;
+    match key.code {
+        KeyCode::Tab | KeyCode::Down => form.next_field(),
+        KeyCode::BackTab | KeyCode::Up => form.prev_field(),
+        KeyCode::Enter => form.newline(),
+        KeyCode::Backspace => form.backspace(),
+        KeyCode::Left if kind == FieldKind::Choice => form.cycle(-1),
+        KeyCode::Right if kind == FieldKind::Choice => form.cycle(1),
+        KeyCode::PageDown if kind == FieldKind::Multiline => form.scroll_description(5),
+        KeyCode::PageUp if kind == FieldKind::Multiline => form.scroll_description(-5),
+        // Space cycles a choice too — it's what the hands reach for, and
+        // it can't mean anything else on a field that ignores typing.
+        KeyCode::Char(' ') if kind == FieldKind::Choice => form.cycle(1),
+        KeyCode::Char(c) if !ctrl => form.insert_char(c),
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Run one background operation on a dedicated thread with its own
 /// current-thread runtime.
 ///
@@ -498,7 +582,8 @@ where
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode().context("entering raw mode")?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen).context("entering the alternate screen")?;
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)
+        .context("entering the alternate screen")?;
     let terminal = Terminal::new(CrosstermBackend::new(stdout)).context("creating the terminal")?;
     // A panic in raw mode leaves the terminal unusable — no echo, no line
     // discipline, in the alternate screen — and the user has to blind-type
@@ -506,7 +591,7 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(io::stdout(), DisableBracketedPaste, LeaveAlternateScreen);
         default_hook(info);
     }));
     Ok(terminal)
@@ -514,7 +599,11 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        DisableBracketedPaste,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
     Ok(())
 }

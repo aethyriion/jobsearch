@@ -138,6 +138,67 @@ known to be big*. With `true` on a fresh database, everything shows, which
 is the right failure mode — an empty startup view would look like a broken
 filter rather than like missing data.
 
+## Applications the scrapers never found
+
+Not every job arrives through a board. Referrals, recruiter emails,
+postings taken down after you applied, companies on an ATS this tool
+doesn't speak — press `a` in the TUI and type it in.
+
+The form asks for exactly what a fetcher produces (company, title,
+location, URL, posted date, description) plus the things only you know:
+stage, headcount, your status and your notes. Paste the job description
+straight in — bracketed paste is on, so a multi-KB JD lands as one event
+rather than as a thousand keystrokes.
+
+```
+ Company     Northwind Systems
+ Title       Staff Platform Engineer
+ Location    Remote - US
+ Stage     ‹ seed ›
+ Status    ‹ applied ›
+ ┌ Description — paste the JD here ──────────────────┐
+ │ We are hiring a Staff Platform Engineer to own... │
+ └───────────────────────────────────────────────────┘
+ tab/↑↓ field · ←/→ cycle · enter newline · ^S save · esc cancel
+```
+
+Hand-entered rows are marked `+` in the list and behave like any other
+job: they sort and filter alongside fetched ones, and `jobsearch evaluate`
+scores them against your profile exactly the same way.
+
+Two deliberate exceptions, both because these rows were never
+*discovered*:
+
+- **Startup mode never hides them.** Hiding a job you actually applied to
+  because the employer turned out to be public would defeat the point of
+  tracking it.
+- **`refilter` never demotes them.** They didn't pass the filters to get
+  here, so a filter tweak can't quietly drop an application off your list.
+
+**Pasting a URL a fetcher already found merges instead of duplicating.**
+Applied through a Greenhouse link that's already in the database? Paste
+it, set your status, save — it attaches to the existing row, keeps that
+row's `source` and description, and rescues it if the filters had dropped
+it. Blank boxes mean "leave it alone", so adding a status can't wipe a
+fetched description.
+
+Leave the URL blank and you get a stable `manual:company/title` one, so
+re-entering the same role updates it rather than piling up near-duplicates.
+
+`E` edits any row (including fetched ones — useful for fixing a mangled
+title or adding a stage). `D` deletes, but only hand-entered rows: deleting
+a fetched one would just invite it back on the next run.
+
+From a script:
+
+```bash
+jobsearch add --company "Northwind Systems" \
+              --title "Staff Platform Engineer" \
+              --location "Remote - US" --stage seed --headcount 14 \
+              --status applied --notes "referred by Dana" \
+              --description-file jd.txt      # or `-` for stdin
+```
+
 ## Commands
 
 | Command | What it does |
@@ -147,6 +208,7 @@ filter rather than like missing data.
 | `jobsearch evaluate` | Score unevaluated candidates with Claude. **The only step that costs money.** `--dry-run` to see the queue, `--limit N` to cap, `--all-stages` to score beyond startups. |
 | `jobsearch discover-yc` | Pull the YC directory, record stages, resolve ATS boards. |
 | `jobsearch refilter` | Re-apply the current `filters.yaml` to everything already stored, without re-fetching. Run it after editing filters. |
+| `jobsearch add` | Record an application by hand, for scripting. `--description-file -` reads the JD from stdin. The TUI's `a` key is the interactive version. |
 | `jobsearch inspect [URL]` | Print a stored job in full, or with no URL list recent rejections and why each was dropped. |
 | `jobsearch check` | Validate every config file and report stage coverage. |
 
@@ -168,6 +230,10 @@ FILTER   s   startup mode on/off
 
 TRIAGE   1 applied  2 interview  3 rejected  4 skipped  5 silence  0 clear
          n   edit notes            o  open in browser
+
+ENTRIES  a   add an application the scrapers never found
+         E   edit the selected row
+         D   delete it (hand-entered rows only)
 
 RUN      r   fetch          e  score with Claude        F5  reload
          ?   help           q  quit
@@ -238,6 +304,9 @@ One SQLite file, `data/seen_jobs.sqlite3`:
 | `company_stage` | Stage, headcount and provenance per company. |
 | `ats_resolution` | Which ATS board a company resolved to — including the misses, so re-runs don't re-probe. |
 
+Hand-entered rows live in those same tables with `job_details.source =
+'manual'` — no separate table, so the frozen web board shows them too.
+
 JD text deliberately stays out of the CSVs: a multi-KB job description in
 a spreadsheet cell defeats the point of the CSV being a quick scannable
 list. `data/candidates.csv` and `data/scored_candidates.csv` are exports,
@@ -264,7 +333,7 @@ has no concept of company stage, so it can't do startup mode. See
 ## Development
 
 ```bash
-cargo test          # 48 unit tests, no network
+cargo test          # 71 unit tests, no network
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
@@ -272,8 +341,9 @@ cargo fmt
 Tests cover the filter rules (including the regex trap above), dedup and
 stage-precedence in the store, the HN posting parser, YC's stage mapping,
 the Anthropic tool-response parser (complete, truncated and refused
-shapes), `companies.yaml` appending, and the TUI's filter/sort/selection
-logic. None of them touch the network.
+shapes), `companies.yaml` appending, the manual-entry form and its merge
+semantics, and the TUI's filter/sort/selection logic. None of them touch
+the network.
 
 ### Layout
 
@@ -295,6 +365,7 @@ src/
     http.rs         shared client
   tui/
     app.rs        state and transitions (no terminal I/O — unit-testable)
+    form.rs       the manual-entry page's fields and validation
     ui.rs         rendering
     mod.rs        event loop and background tasks
 ```

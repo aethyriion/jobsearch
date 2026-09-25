@@ -103,6 +103,56 @@ CREATE TABLE IF NOT EXISTS ats_resolution (
 );
 "#;
 
+/// One hand-entered application, as the form and the `add` subcommand
+/// both produce it.
+///
+/// The string fields are non-optional and empty-means-unset, matching how
+/// a text box behaves; `my_status`/`notes` are `Option` because "the form
+/// didn't ask" and "the user cleared it" need to stay distinguishable.
+#[derive(Debug, Clone, Default)]
+pub struct ManualEntry {
+    pub url: String,
+    pub company: String,
+    pub title: String,
+    pub location: String,
+    pub posted_at: String,
+    pub description: String,
+    pub stage: Option<Stage>,
+    pub headcount: Option<i64>,
+    pub my_status: Option<String>,
+    pub notes: Option<String>,
+}
+
+impl ManualEntry {
+    /// A URL for an entry that has none. Plenty of applications have no
+    /// public posting left — a referral, a recruiter email, a listing
+    /// that's since been taken down — but the URL is half the dedup key
+    /// and the handle everything else uses, so one has to be minted.
+    ///
+    /// Deterministic in company+title so re-adding the same role twice
+    /// updates it rather than piling up near-duplicates, and namespaced
+    /// under `manual:` so it can never collide with a real posting.
+    pub fn synthetic_url(company: &str, title: &str) -> String {
+        let slug = |s: &str| {
+            normalize(s)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join("-")
+        };
+        format!("manual:{}/{}", slug(company), slug(title))
+    }
+
+    /// Fill in a synthetic URL if none was given.
+    pub fn with_url(mut self) -> Self {
+        if self.url.trim().is_empty() {
+            self.url = Self::synthetic_url(&self.company, &self.title);
+        } else {
+            self.url = self.url.trim().to_string();
+        }
+        self
+    }
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -178,6 +228,129 @@ impl Store {
             "UPDATE job_details SET passed_filters = ?1 WHERE url = ?2",
             params![i64::from(passed), url],
         )?;
+        Ok(())
+    }
+
+    // ------------------------------------------------------ manual entries
+
+    /// Save a hand-entered application, returning whether it created a new
+    /// row (`true`) or merged into one a fetcher had already found.
+    ///
+    /// Three things make this different from `save_details`:
+    ///
+    /// - `passed_filters` is always 1. The filters exist to decide what is
+    ///   worth *discovering*; a job you actually applied to is in scope by
+    ///   definition, and letting a title rule hide it would be absurd.
+    /// - Merging is the right behaviour when the URL is already known.
+    ///   Pasting a Greenhouse link you applied through should attach your
+    ///   status to the row that already exists, not create a second one —
+    ///   and it deliberately keeps the original `source`, because the
+    ///   posting really did come from that board.
+    /// - Blank fields never overwrite fetched ones. On a merge, an empty
+    ///   box in the form means "leave it alone", so adding a status to a
+    ///   scraped row can't wipe its description.
+    pub fn upsert_manual_job(&self, entry: &ManualEntry) -> Result<bool> {
+        let existing = self.get_by_url(&entry.url)?;
+        let is_new = existing.is_none();
+
+        let source = match &existing {
+            // Keep the fetcher's name: the posting's provenance doesn't
+            // change just because you typed a status against it.
+            Some(row) if !row.source.is_empty() && !row.is_manual() => row.source.clone(),
+            _ => crate::model::MANUAL_SOURCE.to_string(),
+        };
+        let keep = |new: &str, old: Option<&str>| -> String {
+            if new.trim().is_empty() {
+                old.unwrap_or_default().to_string()
+            } else {
+                new.trim().to_string()
+            }
+        };
+
+        let company = keep(
+            &entry.company,
+            existing.as_ref().map(|r| r.company.as_str()),
+        );
+        let title = keep(&entry.title, existing.as_ref().map(|r| r.title.as_str()));
+        let location = keep(
+            &entry.location,
+            existing.as_ref().map(|r| r.location.as_str()),
+        );
+        let description = keep(
+            &entry.description,
+            existing.as_ref().map(|r| r.description.as_str()),
+        );
+        let posted_at = if entry.posted_at.trim().is_empty() {
+            existing.as_ref().and_then(|r| r.posted_at.clone())
+        } else {
+            Some(entry.posted_at.trim().to_string())
+        };
+
+        let job = Job {
+            company: company.clone(),
+            title,
+            location,
+            url: entry.url.clone(),
+            posted_at,
+            description,
+            source,
+            stage_hint: None,
+        };
+
+        // seen_jobs too, so a later fetch that turns up the same posting
+        // dedups against it instead of adding a duplicate alongside.
+        self.mark_seen(&job)?;
+        self.save_details(&job, true)?;
+
+        if let Some(stage) = entry.stage {
+            self.upsert_company_stage(&CompanyStage {
+                company,
+                stage,
+                headcount: entry.headcount,
+                source: StageSource::Manual,
+                note: Some("entered by hand".to_string()),
+            })?;
+        }
+
+        // Only touch user_status when the form actually carried one —
+        // otherwise editing a manual row's title would silently clear a
+        // status set earlier with the 1-5 keys.
+        if entry.my_status.is_some() || entry.notes.is_some() {
+            let previous = self.get_user_status(&entry.url)?;
+            let status = entry
+                .my_status
+                .clone()
+                .or_else(|| previous.as_ref().and_then(|p| p.0.clone()));
+            let notes = entry
+                .notes
+                .clone()
+                .or_else(|| previous.as_ref().and_then(|p| p.1.clone()));
+            self.save_user_status(&entry.url, status.as_deref(), notes.as_deref())?;
+        }
+
+        Ok(is_new)
+    }
+
+    fn get_user_status(&self, url: &str) -> Result<Option<(Option<String>, Option<String>)>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT my_status, notes FROM user_status WHERE url = ?1",
+                params![url],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+    }
+
+    /// Remove a job entirely — every table, including the dedup key, so a
+    /// later fetch can rediscover it. Only reachable for manual rows in the
+    /// UI: deleting a fetched one would just invite it straight back on the
+    /// next run.
+    pub fn delete_job(&self, url: &str) -> Result<()> {
+        for table in ["ai_evaluations", "user_status", "job_details", "seen_jobs"] {
+            self.conn
+                .execute(&format!("DELETE FROM {table} WHERE url = ?1"), params![url])?;
+        }
         Ok(())
     }
 
@@ -663,6 +836,162 @@ mod tests {
             row.my_status, None,
             "empty string must clear, not store \"\""
         );
+    }
+
+    fn manual(company: &str, title: &str) -> ManualEntry {
+        ManualEntry {
+            company: company.into(),
+            title: title.into(),
+            location: "Remote - US".into(),
+            ..Default::default()
+        }
+        .with_url()
+    }
+
+    #[test]
+    fn a_manual_entry_always_passes_the_filters() {
+        let s = store();
+        assert!(s.upsert_manual_job(&manual("Acme", "Engineer")).unwrap());
+        let rows = s.all_candidates().unwrap();
+        assert_eq!(rows.len(), 1, "must be visible without passing any filter");
+        assert!(rows[0].is_manual());
+    }
+
+    #[test]
+    fn re_adding_the_same_role_updates_rather_than_duplicating() {
+        let s = store();
+        assert!(s.upsert_manual_job(&manual("Acme", "Engineer")).unwrap());
+        let mut second = manual("Acme", "Engineer");
+        second.location = "Columbus, Ohio".into();
+        assert!(
+            !s.upsert_manual_job(&second).unwrap(),
+            "same company+title means the same synthetic URL, so it updates"
+        );
+        let rows = s.all_candidates().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].location, "Columbus, Ohio");
+    }
+
+    #[test]
+    fn adding_a_url_a_fetcher_already_found_merges_and_keeps_its_source() {
+        let s = store();
+        let mut scraped = job("Fly.io", "Platform Engineer", "https://fly.io/jobs/1");
+        scraped.description = "the full fetched JD".into();
+        s.mark_seen(&scraped).unwrap();
+        s.save_details(&scraped, true).unwrap();
+
+        let entry = ManualEntry {
+            url: "https://fly.io/jobs/1".into(),
+            company: "Fly.io".into(),
+            title: "Platform Engineer".into(),
+            my_status: Some("applied".into()),
+            ..Default::default()
+        }
+        .with_url();
+        assert!(!s.upsert_manual_job(&entry).unwrap(), "merges, not creates");
+
+        let rows = s.all_candidates().unwrap();
+        assert_eq!(rows.len(), 1, "no duplicate row");
+        assert_eq!(rows[0].source, "greenhouse", "provenance is preserved");
+        assert!(!rows[0].is_manual());
+        assert_eq!(rows[0].my_status.as_deref(), Some("applied"));
+        assert_eq!(
+            rows[0].description, "the full fetched JD",
+            "a blank form field must not wipe the fetched description"
+        );
+    }
+
+    #[test]
+    fn merging_rescues_a_row_the_filters_had_dropped() {
+        let s = store();
+        let dropped = job("Acme", "Engineer", "https://acme/1");
+        s.save_details(&dropped, false).unwrap();
+        assert!(s.all_candidates().unwrap().is_empty());
+
+        let entry = ManualEntry {
+            url: "https://acme/1".into(),
+            company: "Acme".into(),
+            title: "Engineer".into(),
+            my_status: Some("interview".into()),
+            ..Default::default()
+        };
+        s.upsert_manual_job(&entry).unwrap();
+        // You applied to it, so it belongs on the list whatever the
+        // filters thought.
+        assert_eq!(s.all_candidates().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_hand_entered_stage_outranks_every_other_source() {
+        let s = store();
+        s.upsert_company_stage(&CompanyStage {
+            company: "Acme".into(),
+            stage: Stage::Public,
+            headcount: None,
+            source: StageSource::Curated,
+            note: None,
+        })
+        .unwrap();
+        let mut entry = manual("Acme", "Engineer");
+        entry.stage = Some(Stage::SeriesA);
+        entry.headcount = Some(30);
+        s.upsert_manual_job(&entry).unwrap();
+
+        let rows = s.all_candidates().unwrap();
+        assert_eq!(rows[0].stage, Some(Stage::SeriesA));
+        assert_eq!(rows[0].stage_source, Some(StageSource::Manual));
+    }
+
+    #[test]
+    fn editing_without_a_status_keeps_the_one_set_with_the_number_keys() {
+        let s = store();
+        let entry = manual("Acme", "Engineer");
+        s.upsert_manual_job(&entry).unwrap();
+        s.save_user_status(&entry.url, Some("interview"), None)
+            .unwrap();
+
+        // An edit that carries notes but no status must not clear it.
+        let mut edit = manual("Acme", "Engineer");
+        edit.notes = Some("phone screen went well".into());
+        s.upsert_manual_job(&edit).unwrap();
+
+        let row = &s.all_candidates().unwrap()[0];
+        assert_eq!(row.my_status.as_deref(), Some("interview"));
+        assert_eq!(row.notes.as_deref(), Some("phone screen went well"));
+    }
+
+    #[test]
+    fn a_manual_entry_is_queued_for_scoring_even_with_no_stage() {
+        let s = store();
+        s.upsert_manual_job(&manual("Acme", "Engineer")).unwrap();
+        let policy = crate::filters::StartupPolicy {
+            enabled_by_default: true,
+            max_stage: Stage::Growth,
+            max_headcount: None,
+            // Strict: an unknown-stage scraped row would be excluded here.
+            include_unknown: false,
+        };
+        assert_eq!(s.unevaluated(Some(&policy)).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn deleting_clears_every_table_so_a_fetch_can_rediscover_it() {
+        let s = store();
+        let entry = manual("Acme", "Engineer");
+        s.upsert_manual_job(&entry).unwrap();
+        s.save_user_status(&entry.url, Some("applied"), Some("note"))
+            .unwrap();
+        s.delete_job(&entry.url).unwrap();
+
+        assert!(s.all_candidates().unwrap().is_empty());
+        let readded = Job {
+            url: entry.url.clone(),
+            company: "Acme".into(),
+            title: "Engineer".into(),
+            location: "Remote - US".into(),
+            ..Default::default()
+        };
+        assert!(s.is_new(&readded).unwrap(), "dedup key must be gone too");
     }
 
     #[test]

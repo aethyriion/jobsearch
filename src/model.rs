@@ -42,6 +42,10 @@ pub struct StageHint {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StageSource {
+    /// Typed into the manual-entry form. Highest trust of all: you were
+    /// looking at the company when you wrote it, which is more than can be
+    /// said for a list edited months ago.
+    Manual,
     /// Hand-written `stage:` in companies.yaml. Highest trust: a human
     /// looked it up.
     Curated,
@@ -59,6 +63,7 @@ impl StageSource {
     /// company.
     pub fn rank(self) -> u8 {
         match self {
+            StageSource::Manual => 4,
             StageSource::Curated => 3,
             StageSource::Source => 2,
             StageSource::Ai => 1,
@@ -67,14 +72,27 @@ impl StageSource {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            StageSource::Manual => "manual",
             StageSource::Curated => "curated",
             StageSource::Source => "source",
             StageSource::Ai => "ai",
         }
     }
 
+    /// How the TUI labels it next to a stage. "you" reads better than
+    /// "manual" in `series-a (you)`.
+    pub fn label(self) -> &'static str {
+        match self {
+            StageSource::Manual => "you",
+            StageSource::Curated => "curated",
+            StageSource::Source => "yc",
+            StageSource::Ai => "ai",
+        }
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
+            "manual" => Some(StageSource::Manual),
             "curated" => Some(StageSource::Curated),
             "source" => Some(StageSource::Source),
             "ai" => Some(StageSource::Ai),
@@ -243,7 +261,17 @@ impl JobRow {
     pub fn ai_status(&self) -> &str {
         self.recommendation.as_deref().unwrap_or("unscored")
     }
+
+    /// Whether you entered this by hand rather than a fetcher finding it.
+    pub fn is_manual(&self) -> bool {
+        self.source == MANUAL_SOURCE
+    }
 }
+
+/// `job_details.source` for a hand-entered row. Every fetcher writes its
+/// own name here, so this just claims one more value in that space — no
+/// extra column, and the frozen web board shows it without changes.
+pub const MANUAL_SOURCE: &str = "manual";
 
 /// The statuses you assign yourself, deliberately a different vocabulary
 /// from the AI's apply/consider/skip so the two can never be confused in

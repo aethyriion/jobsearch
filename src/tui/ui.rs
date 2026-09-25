@@ -54,6 +54,13 @@ fn my_status_style(status: Option<&str>) -> Style {
 }
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    // The form is a page, not an overlay: it needs the vertical room for a
+    // pasted job description, and there is nothing useful to see behind it.
+    if app.mode == Mode::Form {
+        draw_form(f, f.area(), app);
+        return;
+    }
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -80,6 +87,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.mode == Mode::Help {
         draw_help(f, f.area());
     }
+    if app.mode == Mode::ConfirmDelete {
+        draw_confirm_delete(f, f.area(), app);
+    }
 }
 
 fn draw_header(f: &mut Frame, area: Rect, app: &App) {
@@ -92,11 +102,12 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
                 .bg(Color::Cyan),
         ),
         Span::raw(format!(
-            " {} shown / {} total · {} startup · {} unscored ",
+            " {} shown / {} total · {} startup · {} unscored · {} yours ",
             app.view.len(),
             app.rows.len(),
             app.startup_count(),
-            app.unscored_count()
+            app.unscored_count(),
+            app.manual_count()
         )),
     ];
 
@@ -166,6 +177,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
 
     let header = Row::new(vec![
         Cell::from("scr"),
+        Cell::from(""),
         Cell::from("company"),
         Cell::from("title"),
         Cell::from("stg"),
@@ -190,6 +202,12 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
                         .unwrap_or_else(|| "  –".into()),
                 )
                 .style(score_style(r.match_score)),
+                // One character marking a row you entered yourself. It
+                // earns its column: a hand-entered row is exempt from
+                // startup mode and from refilter, so knowing which rows
+                // those are explains why they're on screen.
+                Cell::from(if r.is_manual() { "+" } else { " " })
+                    .style(Style::default().fg(Color::Magenta)),
                 Cell::from(r.company.clone()),
                 Cell::from(r.title.clone()),
                 Cell::from(r.stage.map(Stage::short).unwrap_or("?")).style(stage_style(r.stage)),
@@ -202,6 +220,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
 
     let widths = [
         Constraint::Length(3),
+        Constraint::Length(1),
         Constraint::Percentage(26),
         Constraint::Fill(1),
         Constraint::Length(4),
@@ -290,7 +309,7 @@ fn detail_lines(row: &JobRow) -> Vec<Line<'static>> {
         // not, and the three sources really do differ in reliability.
         if let Some(src) = row.stage_source {
             meta.push(Span::styled(
-                format!(" ({})", src.as_str()),
+                format!(" ({})", src.label()),
                 Style::default().fg(Color::DarkGray),
             ));
         }
@@ -303,7 +322,12 @@ fn detail_lines(row: &JobRow) -> Vec<Line<'static>> {
     lines.push(Line::from(meta));
 
     let mut sub = Vec::new();
-    if !row.source.is_empty() {
+    if row.is_manual() {
+        sub.push(Span::styled(
+            "entered by hand",
+            Style::default().fg(Color::Magenta),
+        ));
+    } else if !row.source.is_empty() {
         sub.push(Span::styled(
             format!("via {}", row.source),
             Style::default().fg(Color::DarkGray),
@@ -450,9 +474,11 @@ fn draw_keys(f: &mut Frame, area: Rect, app: &App) {
     let keys = match app.mode {
         Mode::Search | Mode::Notes => "enter save · esc cancel",
         Mode::Help => "any key to close",
+        Mode::Form => "tab/↑↓ field · ←/→ cycle · enter newline · ^S save · esc cancel",
+        Mode::ConfirmDelete => "y delete · any other key cancel",
         Mode::Normal => {
-            "j/k move · tab pane · s startup · / search · f ai · m mine · S sort · \
-             1-5 status · 0 clear · n note · o open · r fetch · e eval · ? help · q quit"
+            "j/k move · tab pane · s startup · / search · a add · E edit · 1-5 status · \
+             n note · o open · r fetch · e eval · ? help · q quit"
         }
     };
     f.render_widget(
@@ -481,6 +507,10 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from("           4 skipped   5 silence     0 clear"),
         Line::from("           n   edit notes          o  open in browser"),
         Line::from(""),
+        Line::from("  ENTRIES  a   add an application the scrapers never found"),
+        Line::from("           E   edit the selected row"),
+        Line::from("           D   delete it (hand-entered rows only)"),
+        Line::from(""),
         Line::from("  RUN      r   fetch new jobs from every configured source"),
         Line::from("           e   score unevaluated jobs with Claude (costs money)"),
         Line::from("           F5  reload from the database"),
@@ -491,6 +521,14 @@ fn draw_help(f: &mut Frame, area: Rect) {
         )),
         Line::from(Span::styled(
             "  always stored, so toggling it never needs a re-fetch.",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "  Rows marked + are yours. They are never hidden by startup",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "  mode or demoted by refilter, and they score like any other.",
             Style::default().fg(Color::DarkGray),
         )),
         Line::from(""),
@@ -530,4 +568,169 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(v[1])[1]
+}
+
+// ----------------------------------------------------------------- the form
+
+/// Draw the manual-entry page: a label/value row per single-line field,
+/// then the description box taking whatever height is left.
+fn draw_form(f: &mut Frame, area: Rect, app: &App) {
+    use super::form::{FieldKind, FIELDS};
+
+    let Some(form) = &app.form else { return };
+
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta))
+        .title(form.title());
+    let inner = outer.inner(area);
+    f.render_widget(outer, area);
+
+    let single_line = FIELDS
+        .iter()
+        .filter(|s| s.kind != FieldKind::Multiline)
+        .count() as u16;
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(single_line), // the label/value rows
+            Constraint::Length(1),           // spacer
+            Constraint::Min(4),              // description
+            Constraint::Length(1),           // error / hint
+        ])
+        .split(inner);
+
+    // --- single-line fields -------------------------------------------
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, spec) in FIELDS.iter().enumerate() {
+        if spec.kind == FieldKind::Multiline {
+            continue;
+        }
+        let focused = i == form.focus;
+        let value = form.value_at(i);
+        let mut spans = vec![Span::styled(
+            format!("  {:<12}", spec.label),
+            if focused {
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
+        )];
+
+        if spec.kind == FieldKind::Choice {
+            // Arrows only on the focused row, so the page doesn't read as
+            // a wall of chevrons.
+            spans.push(Span::styled(
+                if focused {
+                    format!("‹ {value} ›")
+                } else {
+                    format!("  {value}  ")
+                },
+                Style::default().fg(Color::Cyan),
+            ));
+        } else {
+            spans.push(Span::raw(value.to_string()));
+            if focused {
+                spans.push(Span::styled("█", Style::default().fg(Color::Magenta)));
+            }
+        }
+
+        // The hint sits on the focused row only — it's guidance for what
+        // you're typing now, not a permanent annotation.
+        if focused && !spec.hint.is_empty() {
+            spans.push(Span::styled(
+                format!("   {}", spec.hint),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+    f.render_widget(Paragraph::new(lines), rows[0]);
+
+    // --- description ---------------------------------------------------
+    let desc_index = FIELDS
+        .iter()
+        .position(|s| s.kind == FieldKind::Multiline)
+        .expect("the form has a description field");
+    let desc_focused = form.focus == desc_index;
+    let desc = form.value_at(desc_index);
+
+    let desc_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(if desc_focused {
+            Style::default().fg(Color::Magenta)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        })
+        .title(if desc_focused {
+            " Description — paste the JD here ".to_string()
+        } else {
+            format!(" Description ({} chars) ", desc.chars().count())
+        });
+
+    let body = if desc.is_empty() && !desc_focused {
+        Paragraph::new(Span::styled(
+            "empty — without a description the AI step has only the title and company to judge from",
+            Style::default().fg(Color::DarkGray),
+        ))
+    } else {
+        let mut text = desc.to_string();
+        if desc_focused {
+            text.push('█');
+        }
+        Paragraph::new(text)
+    };
+    f.render_widget(
+        body.block(desc_block)
+            .wrap(Wrap { trim: false })
+            .scroll((form.desc_scroll, 0)),
+        rows[2],
+    );
+
+    // --- error / footer -------------------------------------------------
+    let footer = match &form.error {
+        Some(e) => Line::from(Span::styled(
+            format!("  {e}"),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )),
+        None => Line::from(Span::styled(
+            "  Company and Title are required — everything else is optional.",
+            Style::default().fg(Color::DarkGray),
+        )),
+    };
+    f.render_widget(Paragraph::new(footer), rows[3]);
+}
+
+fn draw_confirm_delete(f: &mut Frame, area: Rect, app: &App) {
+    let Some(row) = app.selected_row() else {
+        return;
+    };
+    let popup = centered_rect(56, 22, area);
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("  Delete {} — {}?", row.company, row.title),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  This removes the entry, its score and your notes.",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from("  y to delete · any other key to cancel"),
+        ])
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red))
+                .title(" confirm "),
+        ),
+        popup,
+    );
 }
