@@ -138,6 +138,47 @@ known to be big*. With `true` on a fresh database, everything shows, which
 is the right failure mode — an empty startup view would look like a broken
 filter rather than like missing data.
 
+## Seniority
+
+A second axis, alongside company stage. The level is read from the job
+title, and `L` cycles the filter: the configured policy, then each rung on
+its own, then unlabelled, then everything.
+
+```
+intern · junior · mid · senior · staff · manager
+```
+
+Where the range sits is `seniority:` in `filters.yaml`. Like startup mode
+it's a **view** policy — every posting is stored whatever its level, so
+widening or narrowing takes effect instantly against what's already in the
+database.
+
+```yaml
+seniority:
+  min: junior          # widen or narrow the range
+  max: staff           # `staff` keeps principal/lead IC in, manager out
+  include_unknown: true
+```
+
+**Keep `include_unknown: true`.** A bare "Software Engineer" states no
+level and is one of the commonest titles there is — excluding those throws
+away most of the list to avoid a handful of mismatches.
+
+Three things the title reader handles that a naive keyword match doesn't:
+
+- **"Member of Technical Staff" is not staff level.** Several AI labs use
+  it as a flat title at every rung, so reading its "staff" as staff-level
+  would promote a new-grad posting to the top of the ladder.
+- **A spelled-out rung beats a bare roman numeral.** "Principal Software
+  Engineer I" is principal, not junior.
+- **Management is a track, not a rung.** "Engineering Manager" and
+  "Director of Platform" are caught before the engineering words are.
+
+Level vetoes deliberately do **not** live in `hard_exclusion_keywords`.
+That list is a *fetch-time* decision — a job it matches is marked failed
+and never surfaces again, so changing your mind means a re-fetch. Only the
+wrong *track* (manager, director, VP) is vetoed there.
+
 ## Applications the scrapers never found
 
 Not every job arrives through a board. Referrals, recruiter emails,
@@ -264,11 +305,12 @@ MOVE     j/k or ↑/↓  move          g/G  top/bottom
          tab          switch pane   J/K  scroll detail
 
 FILTER   s   startup mode on/off
+         L   level: the policy, then each rung, then unlabelled, then any
          f   AI verdict: all / apply / consider / skip / unscored
          m   your status: all / tracked / untouched / applied /
              interview / rejected / skipped / silence
          /   search company, title and location
-         S   sort: score / company / title / stage / posted / status
+         S   sort: score / company / title / stage / posted / status / level
          R   reverse sort
 
 TRIAGE   1 applied  2 interview  3 rejected  4 skipped  5 silence  0 clear
@@ -310,7 +352,13 @@ recompile.
    every US *on-site* role, because SmartRecruiters appends the country
    code to every location ("Santa Clara, CA, us").
 
-2. **`filters.yaml` → `stack_dealbreakers` / `stack_core`** — a JD is
+2. **`filters.yaml` → `seniority:`** — if junior roles aren't showing,
+   check `min` here before anything else. And note that level and location
+   interact: junior and new-grad postings are overwhelmingly on-site, so a
+   remote-only `location_allow_patterns` will filter out most of them
+   whatever the level range says.
+
+3. **`filters.yaml` → `stack_dealbreakers` / `stack_core`** — a JD is
    rejected if it mentions a dealbreaker language and none of your core
    stack. If your own stack includes a "dealbreaker" language, move it
    into `stack_core`.
@@ -322,7 +370,7 @@ recompile.
    A leading `\b` is fine. `cargo test` now fails on any dealbreaker
    pattern with this shape.
 
-3. **`companies.yaml`** — who you're actually applying to.
+4. **`companies.yaml`** — who you're actually applying to.
    `aggregators.yaml`'s `where` and `country` are location-specific too;
    `country` is Adzuna's country code, which goes in the URL path rather
    than the query string.
@@ -376,7 +424,7 @@ has no concept of company stage, so it can't do startup mode. See
 ## Development
 
 ```bash
-cargo test          # 85 unit tests, no network
+cargo test          # 100 unit tests, no network
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
@@ -385,7 +433,8 @@ Tests cover the filter rules (including the regex trap above), dedup and
 stage-precedence in the store, the HN posting parser, YC's stage mapping,
 the Anthropic tool-response parser (complete, truncated and refused
 shapes), `companies.yaml` appending, the manual-entry form's modal keys and merge
-semantics, and the TUI's filter/sort/selection logic. None of them touch
+semantics, the seniority title reader and its policy, and the TUI's
+filter/sort/selection logic. None of them touch
 the network.
 
 ### Layout

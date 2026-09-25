@@ -408,11 +408,12 @@ async fn cmd_evaluate(
     let startup_only = !all_stages && filters.startup.enabled_by_default;
 
     let policy = startup_only.then_some(&filters.startup);
-    let mut queue = store.unevaluated(policy)?;
+    let mut queue = store.unevaluated(policy, Some(&filters.seniority))?;
     if let Some(limit) = limit {
         queue.truncate(limit);
     }
 
+    println!("Levels in scope: {}", filters.seniority.describe());
     println!(
         "{} candidate(s) queued for AI evaluation{}.",
         queue.len(),
@@ -429,7 +430,8 @@ async fn cmd_evaluate(
     if dry_run {
         for job in &queue {
             println!(
-                "WOULD EVALUATE | {:<8} | {:<24} | {}",
+                "WOULD EVALUATE | {:<5} | {:<8} | {:<24} | {}",
+                job.seniority().map(model::Seniority::short).unwrap_or("?"),
                 job.stage.map(model::Stage::short).unwrap_or("?"),
                 truncate(&job.company, 24),
                 job.title
@@ -675,6 +677,13 @@ fn cmd_inspect(paths: &Paths, url: Option<String>, limit: usize) -> Result<()> {
     println!("{:<16}: {}", "location", row.location);
     println!("{:<16}: {}", "source", row.source);
     println!(
+        "{:<16}: {}",
+        "level",
+        row.seniority()
+            .map(model::Seniority::as_str)
+            .unwrap_or("not stated in the title")
+    );
+    println!(
         "{:<16}: {}{}",
         "stage",
         row.stage.map(model::Stage::as_str).unwrap_or("unknown"),
@@ -865,8 +874,12 @@ fn cmd_check(paths: &Paths) -> Result<()> {
     let filters = load_filters(paths)?;
     println!("filters.yaml      compiled OK");
     println!(
-        "                  startup policy: {}",
+        "                  startup policy:   {}",
         filters.startup.describe()
+    );
+    println!(
+        "                  seniority policy: {}",
+        filters.seniority.describe()
     );
     println!(
         "                  default: {}",
@@ -892,9 +905,11 @@ fn cmd_check(paths: &Paths) -> Result<()> {
             let scored = all.iter().filter(|r| r.match_score.is_some()).count();
             println!("database          {}", paths.db().display());
             let manual = all.iter().filter(|r| r.is_manual()).count();
+            let in_level = all.iter().filter(|r| filters.seniority.admits(r)).count();
             println!(
                 "                  {} candidates, {startup} startup, {scored} scored, \
-                 {manual} entered by hand,\n                  {} companies with a known stage",
+                 {manual} entered by hand,\n                  {in_level} within the level \
+                 policy, {} companies with a known stage",
                 all.len(),
                 store.company_stage_count()?
             );

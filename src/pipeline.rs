@@ -221,7 +221,7 @@ where
     F: FnMut(Progress),
 {
     let policy = startup_only.then_some(&filters.startup);
-    let mut queue = store.unevaluated(policy)?;
+    let mut queue = store.unevaluated(policy, Some(&filters.seniority))?;
     if let Some(limit) = limit {
         queue.truncate(limit);
     }

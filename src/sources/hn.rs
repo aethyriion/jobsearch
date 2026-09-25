@@ -279,7 +279,7 @@ pub fn stage_hint_from_text(text: &str) -> Option<StageHint> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{FiltersConfig, StartupPolicyConfig};
+    use crate::config::{FiltersConfig, SeniorityPolicyConfig, StartupPolicyConfig};
 
     fn filters() -> Filters {
         Filters::compile(&FiltersConfig {
@@ -292,6 +292,7 @@ mod tests {
             stack_core: vec![r"\bgo\b".into()],
             truncated_description_min_chars: 400,
             startup: StartupPolicyConfig::default(),
+            seniority: SeniorityPolicyConfig::default(),
         })
         .unwrap()
     }

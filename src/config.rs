@@ -189,6 +189,47 @@ impl Default for StartupPolicyConfig {
     }
 }
 
+/// Which rungs of the seniority ladder are in scope.
+///
+/// Like the startup policy, this is a VIEW policy, not a fetch policy:
+/// every posting is stored whatever its level, so widening or narrowing
+/// takes effect against jobs already in the database. Run
+/// `jobsearch refilter` after changing it only if you also edited
+/// `hard_exclusion_keywords` — the level policy itself needs no re-run.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SeniorityPolicyConfig {
+    /// Earliest rung to include, inclusive.
+    #[serde(default = "default_min_level")]
+    pub min: String,
+    /// Latest rung to include, inclusive.
+    #[serde(default = "default_max_level")]
+    pub max: String,
+    /// Whether a posting whose title carries no level marker survives.
+    /// Default true, and it matters more here than for stage: a bare
+    /// "Software Engineer" is one of the commonest titles there is, and
+    /// excluding those would throw away most of the list.
+    #[serde(default = "default_true")]
+    pub include_unknown: bool,
+}
+
+fn default_min_level() -> String {
+    "junior".to_string()
+}
+
+fn default_max_level() -> String {
+    "staff".to_string()
+}
+
+impl Default for SeniorityPolicyConfig {
+    fn default() -> Self {
+        Self {
+            min: default_min_level(),
+            max: default_max_level(),
+            include_unknown: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct FiltersConfig {
     /// Level/track vetoes applied before anything else — see
@@ -205,6 +246,8 @@ pub struct FiltersConfig {
     pub truncated_description_min_chars: usize,
     #[serde(default)]
     pub startup: StartupPolicyConfig,
+    #[serde(default)]
+    pub seniority: SeniorityPolicyConfig,
 }
 
 fn default_truncated_min() -> usize {

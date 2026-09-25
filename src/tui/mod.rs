@@ -60,7 +60,7 @@ enum TaskMessage {
 pub async fn run(paths: Paths, filters: Filters) -> Result<()> {
     let store = Store::open(paths.db())?;
     let rows = store.all_candidates()?;
-    let mut app = App::new(rows, filters.startup.clone());
+    let mut app = App::new(rows, filters.startup.clone(), filters.seniority.clone());
     app.status = format!(
         "{} jobs loaded · {} with a known stage · ? for help",
         app.rows.len(),
@@ -327,6 +327,7 @@ fn handle_key(
         KeyCode::Char('s') => app.toggle_startup(),
         KeyCode::Char('f') => app.cycle_ai_filter(),
         KeyCode::Char('m') => app.cycle_my_filter(),
+        KeyCode::Char('L') => app.cycle_level_filter(),
         KeyCode::Char('S') => app.cycle_sort(),
         KeyCode::Char('R') => app.toggle_sort_dir(),
 
