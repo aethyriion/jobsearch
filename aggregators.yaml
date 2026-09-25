@@ -61,7 +61,14 @@ aggregators:
   - name: Adzuna (US, backend engineer Rust or Go)
     type: adzuna
     params:
-      what: "backend engineer rust OR golang"
+      # NOT `what: "backend engineer rust OR golang"`. Adzuna has no
+      # boolean syntax inside `what` — it treats "OR" as a literal
+      # keyword, so that spelling matched 0 jobs (verified 2026-09-25).
+      # The real controls are separate params: `what_and` (every word must
+      # appear) and `what_or` (at least one must). Both are passed through
+      # to the API verbatim, like any param that isn't max_pages/country.
+      what_and: "backend engineer"
+      what_or: "rust golang"
       where: "United States"
       country: us
       results_per_page: 50

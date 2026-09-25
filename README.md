@@ -143,7 +143,7 @@ filter rather than like missing data.
 | Command | What it does |
 |---|---|
 | `jobsearch` / `jobsearch tui` | The review TUI. Fetch (`r`), score (`e`) and triage without leaving it. |
-| `jobsearch fetch` | Pull from every configured source, filter, dedup, store. Free. `--company <slug>` to debug one fetcher. |
+| `jobsearch fetch` | Pull from every configured source, filter, dedup, store. Free. `--company <slug>` or `--aggregator <substring>` to run one source in isolation. |
 | `jobsearch evaluate` | Score unevaluated candidates with Claude. **The only step that costs money.** `--dry-run` to see the queue, `--limit N` to cap, `--all-stages` to score beyond startups. |
 | `jobsearch discover-yc` | Pull the YC directory, record stages, resolve ATS boards. |
 | `jobsearch refilter` | Re-apply the current `filters.yaml` to everything already stored, without re-fetching. Run it after editing filters. |
@@ -217,6 +217,13 @@ recompile.
    `aggregators.yaml`'s `where` and `country` are location-specific too;
    `country` is Adzuna's country code, which goes in the URL path rather
    than the query string.
+
+   One more trap, also found the hard way: **Adzuna has no boolean syntax
+   inside `what`.** `what: "backend engineer rust OR golang"` treats "OR"
+   as a literal keyword and matches nothing at all. Use the separate
+   `what_and` and `what_or` params instead — every param that isn't
+   `max_pages` or `country` is forwarded to the API verbatim, so any of
+   Adzuna's search fields works here.
 
 ## What's stored
 
