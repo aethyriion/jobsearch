@@ -430,3 +430,100 @@ companies:
   - name: Aktion Associates (Maumee, OH)
     ats: workable
     slug: aktion-associates
+
+  # Auto-discovered 2026-09-25 via YC directory
+  - name: "CircuitHub"
+    ats: ashby
+    slug: circuithub
+    stage: series-b
+    headcount: 58
+    # YC Winter 2012 · 8 open roles at discovery
+  - name: "Rescale"
+    ats: ashby
+    slug: rescale
+    stage: growth
+    headcount: 250
+    # YC Winter 2012 · 19 open roles at discovery
+  - name: "Sift"
+    ats: ashby
+    slug: sift
+    stage: growth
+    # YC Summer 2011 · 6 open roles at discovery
+  - name: "HackerRank"
+    ats: greenhouse
+    slug: hackerrank
+    stage: growth
+    headcount: 300
+    # YC Summer 2011 · 27 open roles at discovery
+  - name: "Y Combinator"
+    ats: ashby
+    slug: ycombinator
+    stage: series-b
+    headcount: 100
+    # YC Unspecified · 9 open roles at discovery
+  - name: "Zapier"
+    ats: ashby
+    slug: zapier
+    stage: public
+    headcount: 700
+    # YC Summer 2012 · 10 open roles at discovery
+  - name: "Padlet"
+    ats: ashby
+    slug: padlet
+    stage: growth
+    headcount: 65
+    # YC Winter 2013 · 18 open roles at discovery
+  - name: "InfluxData"
+    ats: ashby
+    slug: influxdata
+    stage: growth
+    headcount: 210
+    # YC Winter 2013 · 3 open roles at discovery
+  - name: "Instacart"
+    ats: greenhouse
+    slug: instacart
+    stage: public
+    headcount: 3000
+    # YC Summer 2012 · 109 open roles at discovery
+  - name: "RADAR"
+    ats: ashby
+    slug: radar
+    stage: series-b
+    headcount: 120
+    # YC Winter 2013 · 20 open roles at discovery
+  - name: "Cambly"
+    ats: ashby
+    slug: cambly
+    stage: growth
+    headcount: 200
+    # YC Winter 2014 · 4 open roles at discovery
+  - name: "Lob"
+    ats: greenhouse
+    slug: lob
+    stage: growth
+    headcount: 150
+    # YC Summer 2013 · 6 open roles at discovery
+  - name: "Algolia"
+    ats: greenhouse
+    slug: algolia
+    stage: public
+    headcount: 810
+    # YC Winter 2014 · 35 open roles at discovery
+  - name: "Flexport"
+    ats: greenhouse
+    slug: flexport
+    stage: public
+    headcount: 3000
+    # YC Winter 2014 · 199 open roles at discovery
+  - name: "Checkr"
+    ats: greenhouse
+    slug: checkr
+    stage: public
+    headcount: 800
+    # YC Summer 2014 · 48 open roles at discovery
+  - name: "GOAT Group"
+    ats: greenhouse
+    slug: goatgroup
+    stage: public
+    headcount: 1600
+    # YC Winter 2011 · 5 open roles at discovery

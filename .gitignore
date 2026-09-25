@@ -1,7 +1,4 @@
-.venv/
-__pycache__/
-*.pyc
-.pytest_cache/
+/target/
 .DS_Store
 .env
 web/node_modules/
