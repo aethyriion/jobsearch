@@ -51,6 +51,11 @@ enum Command {
         /// Only this company slug — for debugging one fetcher.
         #[arg(long, value_name = "SLUG")]
         company: Option<String>,
+        /// Only aggregator entries whose name contains this (case
+        /// insensitive) — the aggregator-side counterpart to --company,
+        /// for trying one source without waiting on the other seven.
+        #[arg(long, value_name = "SUBSTRING")]
+        aggregator: Option<String>,
         #[arg(long)]
         skip_companies: bool,
         #[arg(long)]
@@ -139,6 +144,7 @@ async fn async_main() -> Result<()> {
         }
         Command::Fetch {
             company,
+            aggregator,
             skip_companies,
             skip_aggregators,
             skip_discovery,
@@ -147,6 +153,7 @@ async fn async_main() -> Result<()> {
             cmd_fetch(
                 &paths,
                 company,
+                aggregator,
                 skip_companies,
                 skip_aggregators,
                 skip_discovery,
@@ -178,9 +185,11 @@ fn load_filters(paths: &Paths) -> Result<Filters> {
 
 // ------------------------------------------------------------------ fetch
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_fetch(
     paths: &Paths,
     company: Option<String>,
+    aggregator: Option<String>,
     skip_companies: bool,
     skip_aggregators: bool,
     skip_discovery: bool,
@@ -208,6 +217,24 @@ async fn cmd_fetch(
                 "no company with slug {slug:?} in {}",
                 paths.companies().display()
             );
+        }
+    }
+
+    if let Some(needle) = &aggregator {
+        let needle = needle.to_lowercase();
+        aggs.retain(|a| a.name.to_lowercase().contains(&needle));
+        companies.clear();
+        if aggs.is_empty() {
+            anyhow::bail!(
+                "no aggregator in {} whose name contains {needle:?}",
+                paths.aggregators().display()
+            );
+        }
+        // An explicit --aggregator overrides `enabled: false`, so a source
+        // that is switched off in the file can still be tried by hand
+        // without editing it.
+        for a in &mut aggs {
+            a.enabled = true;
         }
     }
 

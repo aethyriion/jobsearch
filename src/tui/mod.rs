@@ -99,7 +99,19 @@ async fn event_loop(
 
     loop {
         let tick = tokio::select! {
-            Some(ev) = input_rx.recv() => Tick::Input(ev),
+            // `recv()` yielding None means the input thread has gone —
+            // `event::read()` failed, which is what happens when the
+            // terminal itself goes away (closed window, dropped SSH
+            // session). Exit on that directly. Matching only on `Some`
+            // would disable this branch and leave the loop running on the
+            // redraw tick; in practice the next `terminal.draw()` fails on
+            // the dead terminal and propagates, so the process still ends
+            // — but by I/O error rather than on purpose, and only because
+            // drawing happens to come next.
+            ev = input_rx.recv() => match ev {
+                Some(ev) => Tick::Input(ev),
+                None => return Ok(()),
+            },
             Some(msg) = task_rx.recv() => Tick::Task(msg),
             _ = redraw.tick() => Tick::Redraw,
         };
