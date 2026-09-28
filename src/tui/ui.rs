@@ -103,6 +103,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.mode == Mode::ConfirmDelete {
         draw_confirm_delete(f, f.area(), app);
     }
+    if matches!(
+        app.mode,
+        Mode::ConfirmDismissJob | Mode::ConfirmDismissCompany
+    ) {
+        draw_confirm_dismiss(f, f.area(), app);
+    }
 }
 
 fn draw_header(f: &mut Frame, area: Rect, app: &App) {
@@ -123,6 +129,12 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
             app.manual_count()
         )),
     ];
+    if app.dismissed_count() > 0 {
+        spans.push(Span::styled(
+            format!("· {} hidden ", app.dismissed_count()),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
 
     // The startup badge is the one piece of global state worth a
     // permanently visible indicator: every count on this bar means
@@ -237,10 +249,31 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
                 // earns its column: a hand-entered row is exempt from
                 // startup mode and from refilter, so knowing which rows
                 // those are explains why they're on screen.
-                Cell::from(if r.is_manual() { "+" } else { " " })
-                    .style(Style::default().fg(Color::Magenta)),
-                Cell::from(r.company.clone()),
-                Cell::from(r.title.clone()),
+                // One character carrying both origin and visibility:
+                // `+` you entered it, `-` it's hidden, `=` both.
+                Cell::from(match (r.is_manual(), r.dismissed) {
+                    (true, true) => "=",
+                    (true, false) => "+",
+                    (false, true) => "-",
+                    (false, false) => " ",
+                })
+                .style(if r.dismissed {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default().fg(Color::Magenta)
+                }),
+                Cell::from(r.company.clone()).style(if r.dismissed {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default()
+                }),
+                Cell::from(r.title.clone()).style(if r.dismissed {
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::CROSSED_OUT)
+                } else {
+                    Style::default()
+                }),
                 Cell::from(r.seniority().map(Seniority::short).unwrap_or("–"))
                     .style(level_style(r.seniority())),
                 Cell::from(r.stage.map(Stage::short).unwrap_or("?")).style(stage_style(r.stage)),
@@ -367,6 +400,28 @@ fn detail_lines(row: &JobRow) -> Vec<Line<'static>> {
         ));
     }
     lines.push(Line::from(meta));
+
+    if row.dismissed {
+        lines.push(Line::from(vec![
+            Span::styled(
+                match row.dismissed_scope {
+                    Some("company") => " HIDDEN — whole employer ",
+                    _ => " HIDDEN ",
+                },
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                match &row.dismissed_reason {
+                    Some(r) if !r.is_empty() => format!("  {r}   (u restores)"),
+                    _ => "  u restores".to_string(),
+                },
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    }
 
     let mut sub = Vec::new();
     if row.is_manual() {
@@ -524,6 +579,9 @@ fn draw_keys(f: &mut Frame, area: Rect, app: &App) {
         // Drawn by draw_form; the form never reaches this footer.
         Mode::Form => String::new(),
         Mode::ConfirmDelete => "y delete · any other key cancel".to_string(),
+        Mode::ConfirmDismissJob | Mode::ConfirmDismissCompany => {
+            "y hide it · any other key cancel".to_string()
+        }
         // Every binding that isn't discoverable by looking at the screen
         // belongs here, and the whole line has to fit — a hint that gets
         // truncated off the right edge is the same as no hint. So the
@@ -532,14 +590,15 @@ fn draw_keys(f: &mut Frame, area: Rect, app: &App) {
         Mode::Normal => {
             if area.width >= 132 {
                 "j/k move · / search · s startup · L level · f ai · m status · S sort · \
-                 1-5 mark · a add · c edit · n note · o open · r fetch · e eval · ? help · q quit"
+                 1-5 mark · x hide · X hide co · u undo · a add · c edit · n note · o open · \
+                 r fetch · e eval · ? help · q quit"
                     .to_string()
             } else if area.width >= 92 {
-                "j/k move · / search · s startup · L level · f ai · m status · S sort · \
-                 1-5 mark · a add · ? help · q quit"
+                "j/k move · / search · s startup · L level · m status · S sort · 1-5 mark · \
+                 x hide · u undo · a add · ? help · q quit"
                     .to_string()
             } else {
-                "s startup · L level · f ai · m status · S sort · a add · ? help".to_string()
+                "s startup · L level · m status · S sort · x hide · a add · ? help".to_string()
             }
         }
     };
@@ -564,8 +623,8 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from("               (intern/junior/mid/senior/staff/manager),"),
         Line::from("               then unlabelled, then any"),
         Line::from("           f   AI verdict: all/apply/consider/skip/unscored"),
-        Line::from("           m   your status: all/tracked/untouched/applied/"),
-        Line::from("               interview/rejected/skipped/silence"),
+        Line::from("           m   your status: all/tracked/dismissed/untouched/"),
+        Line::from("               applied/interview/rejected/skipped/silence"),
         Line::from("           /   search company, title and location"),
         Line::from("           S   sort: score/company/title/stage/posted/"),
         Line::from("               status/level"),
@@ -575,6 +634,12 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from("  TRIAGE   1 applied   2 interview   3 rejected"),
         Line::from("           4 skipped   5 silence     0 clear"),
         Line::from("           n   edit notes          o  open in browser"),
+        Line::from(""),
+        Line::from("  HIDE     x   hide this posting (stays hidden across refreshes)"),
+        Line::from("           X   hide EVERY posting from this employer, now and"),
+        Line::from("               in future — the one for staffing agencies"),
+        Line::from("           u   restore whatever is hiding the selected row"),
+        Line::from("               (m cycles to the 'dismissed' view to find them)"),
         Line::from(""),
         Line::from("  ENTRIES  a   add an application the scrapers never found"),
         Line::from("           E   edit the selected row"),
@@ -590,6 +655,14 @@ fn draw_help(f: &mut Frame, area: Rect) {
         )),
         Line::from(Span::styled(
             "  always stored, so toggling it never needs a re-fetch.",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "  Marks: + yours · - hidden · = both. Hiding never deletes;",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "  the row keeps its score and notes, and u puts it back.",
             Style::default().fg(Color::DarkGray),
         )),
         Line::from(Span::styled(
@@ -876,6 +949,78 @@ fn draw_confirm_delete(f: &mut Frame, area: Rect, app: &App) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Red))
                 .title(" confirm "),
+        ),
+        popup,
+    );
+}
+
+/// The dismiss confirmation. Spells out the blast radius, because `X`
+/// hides an employer's entire future output and that is not obvious from
+/// a keystroke.
+fn draw_confirm_dismiss(f: &mut Frame, area: Rect, app: &App) {
+    let Some(row) = app.selected_row() else {
+        return;
+    };
+    let company_scope = app.mode == Mode::ConfirmDismissCompany;
+
+    let mut lines = vec![Line::from("")];
+    if company_scope {
+        lines.push(Line::from(vec![
+            Span::raw("  Hide every posting from "),
+            Span::styled(
+                row.company.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("?"),
+        ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Including ones not fetched yet — this is the one for staffing",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  agencies that repost the same roles under new URLs.",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        lines.push(Line::from(vec![
+            Span::raw("  Hide "),
+            Span::styled(
+                format!("{} — {}", row.company, row.title),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("?"),
+        ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  It stays hidden across refreshes, including if it's reposted",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  under a new URL.",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Nothing is deleted. m cycles to the dismissed view, u restores.",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from("  y to hide · any other key to cancel"));
+
+    let popup = centered_rect(64, 34, area);
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .title(if company_scope {
+                    " dismiss employer "
+                } else {
+                    " dismiss posting "
+                }),
         ),
         popup,
     );

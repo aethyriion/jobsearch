@@ -261,6 +261,49 @@ jobsearch add --company "Northwind Systems" \
               --description-file jd.txt      # or `-` for stdin
 ```
 
+## Hiding noise
+
+Not every posting is worth seeing twice — a role you've already been
+rejected from, a listing that's no longer real, or a staffing agency
+reposting the same three jobs under new URLs every week.
+
+`x` hides a posting. `X` hides an employer entirely, including postings
+they haven't made yet. Both ask first, and both are **soft**: nothing is
+deleted, the row keeps its score and your notes, and `u` puts it back.
+
+```
+ x   hide this posting          X   hide this employer, now and in future
+ u   restore whatever is hiding the selected row
+ m   cycle to the `dismissed` view to find hidden rows
+```
+
+Rows are marked in the list: `+` you entered it, `-` it's hidden, `=`
+both.
+
+What "hidden" actually guarantees — each of these is a separate mechanism,
+and all three are needed for a dismissal to stick:
+
+| | |
+|---|---|
+| **Survives a refresh** | Dedup already stops a re-fetch re-adding the row, and the dismissal is keyed independently of it. |
+| **Survives `refilter`** | Loosening a filter never resurrects a dismissed posting — otherwise widening the search would undo all your triage. |
+| **Never scored** | Dismissed rows are cut from the AI queue before it runs. Paying to score something you've hidden is the clearest waste there is. |
+| **Out of the CSVs** | `candidates.csv` and `scored_candidates.csv` are "current candidates"; hidden rows aren't. |
+
+A company dismissal is the one that earns its keep against agencies: it
+matches on the normalized name, so `Motion Recruitment, LLC` and
+`motion recruitment llc.` are the same employer, and it applies to
+postings that don't exist yet.
+
+From a script:
+
+```bash
+jobsearch dismiss --url "https://..." --reason "already applied"
+jobsearch dismiss --company "Motion Recruitment Partners, LLC" --reason "agency"
+jobsearch dismissed                       # list everything hidden
+jobsearch restore --company "Motion Recruitment Partners, LLC"
+```
+
 ## Tracking where each application stands
 
 `m` cycles the status filter: **all → tracked → untouched → applied →
@@ -292,6 +335,7 @@ see where things stand without changing filters to count them.
 | `jobsearch refilter` | Re-apply the current `filters.yaml` to everything already stored, without re-fetching. Run it after editing filters. |
 | `jobsearch add` | Record an application by hand, for scripting. `--description-file -` reads the JD from stdin. The TUI's `a` key is the interactive version. |
 | `jobsearch inspect [URL]` | Print a stored job in full, or with no URL list recent rejections and why each was dropped. |
+| `jobsearch dismiss` | Hide a posting (`--url`) or an employer (`--company`). Soft: `restore` undoes it, `dismissed` lists what's hidden. |
 | `jobsearch diagnose` | Where jobs die in the filter funnel, the daily intake rate, and which single config change reaches the most near-misses. Reads only what's stored; no network. |
 | `jobsearch check` | Validate every config file and report stage coverage. |
 
@@ -308,14 +352,18 @@ MOVE     j/k or ↑/↓  move          g/G  top/bottom
 FILTER   s   startup mode on/off
          L   level: the policy, then each rung, then unlabelled, then any
          f   AI verdict: all / apply / consider / skip / unscored
-         m   your status: all / tracked / untouched / applied /
-             interview / rejected / skipped / silence
+         m   your status: all / tracked / dismissed / untouched /
+             applied / interview / rejected / skipped / silence
          /   search company, title and location
          S   sort: score / company / title / stage / posted / status / level
          R   reverse sort
 
 TRIAGE   1 applied  2 interview  3 rejected  4 skipped  5 silence  0 clear
          n   edit notes            o  open in browser
+
+HIDE     x   hide this posting (stays hidden across refreshes)
+         X   hide EVERY posting from this employer, now and future
+         u   restore whatever is hiding the selected row
 
 ENTRIES  a / i   add an application the scrapers never found
          c / E   edit the selected row
@@ -427,6 +475,7 @@ One SQLite file, `data/seen_jobs.sqlite3`:
 | `ai_evaluations` | Scores and reasoning. |
 | `user_status` | Your `my_status` and notes. |
 | `company_stage` | Stage, headcount and provenance per company. |
+| `dismissed_jobs` / `dismissed_companies` | What you've hidden. Separate from the job rows, so hiding destroys nothing and restoring is lossless. |
 | `ats_resolution` | Which ATS board a company resolved to — including the misses, so re-runs don't re-probe. |
 
 Hand-entered rows live in those same tables with `job_details.source =
@@ -458,7 +507,7 @@ has no concept of company stage, so it can't do startup mode. See
 ## Development
 
 ```bash
-cargo test          # 100 unit tests, no network
+cargo test          # 108 unit tests, no network
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
@@ -467,7 +516,8 @@ Tests cover the filter rules (including the regex trap above), dedup and
 stage-precedence in the store, the HN posting parser, YC's stage mapping,
 the Anthropic tool-response parser (complete, truncated and refused
 shapes), `companies.yaml` appending, the manual-entry form's modal keys and merge
-semantics, the seniority title reader and its policy, and the TUI's
+semantics, the seniority title reader and its policy, dismissal
+persistence across refilter and scoring, and the TUI's
 filter/sort/selection logic. None of them touch
 the network.
 

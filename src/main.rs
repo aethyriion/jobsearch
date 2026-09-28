@@ -152,6 +152,32 @@ enum Command {
         notes: Option<String>,
     },
 
+    /// Hide a posting, or an entire employer, from the list. A soft
+    /// delete: nothing is destroyed, it survives refreshes, and `restore`
+    /// undoes it.
+    Dismiss {
+        /// The posting URL to hide.
+        #[arg(long, conflicts_with = "company")]
+        url: Option<String>,
+        /// Hide every posting from this employer, including future ones.
+        #[arg(long, conflicts_with = "url")]
+        company: Option<String>,
+        /// Why — shown in the dismissed list and the detail pane.
+        #[arg(long)]
+        reason: Option<String>,
+    },
+
+    /// Put a dismissed posting or employer back.
+    Restore {
+        #[arg(long, conflicts_with = "company")]
+        url: Option<String>,
+        #[arg(long, conflicts_with = "url")]
+        company: Option<String>,
+    },
+
+    /// List everything currently hidden.
+    Dismissed,
+
     /// Show where jobs die in the filter funnel — the answer to "are my
     /// filters too tight". Reads only what's already stored; no network.
     Diagnose {
@@ -249,6 +275,13 @@ async fn async_main() -> Result<()> {
                 notes,
             },
         ),
+        Command::Dismiss {
+            url,
+            company,
+            reason,
+        } => cmd_dismiss(&paths, url, company, reason),
+        Command::Restore { url, company } => cmd_restore(&paths, url, company),
+        Command::Dismissed => cmd_dismissed(&paths),
         Command::Diagnose { examples, days } => cmd_diagnose(&paths, examples, days),
         Command::Check => cmd_check(&paths),
     }
@@ -851,6 +884,96 @@ fn cmd_add(paths: &Paths, args: AddArgs) -> Result<()> {
     Ok(())
 }
 
+// --------------------------------------------------------------- dismiss
+
+fn cmd_dismiss(
+    paths: &Paths,
+    url: Option<String>,
+    company: Option<String>,
+    reason: Option<String>,
+) -> Result<()> {
+    let store = Store::open(paths.db())?;
+    match (url, company) {
+        (Some(url), _) => {
+            let row = store
+                .get_by_url(&url)?
+                .ok_or_else(|| anyhow::anyhow!("no stored job with url {url}"))?;
+            store.dismiss_job(&row, reason.as_deref())?;
+            println!("Hidden: {} — {}", row.company, row.title);
+        }
+        (_, Some(company)) => {
+            let n = store.dismiss_company(&company, reason.as_deref())?;
+            println!("Hidden: every posting from {company} ({n} currently stored)");
+            println!("Future postings from them are hidden too.");
+        }
+        _ => anyhow::bail!("pass --url <URL> or --company <NAME>"),
+    }
+    println!("Nothing was deleted. `jobsearch restore` puts it back.");
+    Ok(())
+}
+
+fn cmd_restore(paths: &Paths, url: Option<String>, company: Option<String>) -> Result<()> {
+    let store = Store::open(paths.db())?;
+    match (url, company) {
+        (Some(url), _) => {
+            store.restore_job(&url)?;
+            println!("Restored {url}");
+        }
+        (_, Some(company)) => {
+            store.restore_company(&company)?;
+            println!("Restored every posting from {company}");
+        }
+        _ => anyhow::bail!("pass --url <URL> or --company <NAME>"),
+    }
+    Ok(())
+}
+
+fn cmd_dismissed(paths: &Paths) -> Result<()> {
+    let store = Store::open(paths.db())?;
+    let companies = store.dismissed_company_list()?;
+    let rows: Vec<_> = store
+        .all_stored()?
+        .into_iter()
+        .filter(|r| r.dismissed && r.dismissed_scope == Some("job"))
+        .collect();
+
+    if companies.is_empty() && rows.is_empty() {
+        println!("Nothing is hidden.");
+        return Ok(());
+    }
+
+    if !companies.is_empty() {
+        println!(
+            "HIDDEN EMPLOYERS ({}) — including future postings",
+            companies.len()
+        );
+        for (company, reason, at) in &companies {
+            println!(
+                "  {:<34} {}  {}",
+                truncate(company, 34),
+                &at[..at.len().min(10)],
+                reason.as_deref().unwrap_or("")
+            );
+        }
+        println!();
+    }
+
+    if !rows.is_empty() {
+        println!("HIDDEN POSTINGS ({})", rows.len());
+        for r in &rows {
+            println!(
+                "  {:<24} | {:<52} | {}",
+                truncate(&r.company, 24),
+                truncate(&r.title, 52),
+                r.dismissed_reason.as_deref().unwrap_or("")
+            );
+        }
+        println!();
+    }
+    println!("`jobsearch restore --url <URL>` or `--company <NAME>` puts one back.");
+    Ok(())
+}
+
 // --------------------------------------------------------------- diagnose
 
 fn cmd_diagnose(paths: &Paths, examples: usize, days: i64) -> Result<()> {
@@ -1002,7 +1125,14 @@ fn cmd_diagnose(paths: &Paths, examples: usize, days: i64) -> Result<()> {
         .iter()
         .filter(|r| !filters.seniority.admits(r))
         .count();
+    let dismissed = candidates.iter().filter(|r| r.dismissed).count();
     println!("\nVIEW FILTERS (applied on top, in the TUI — nothing is deleted)");
+    if dismissed > 0 {
+        println!(
+            "  {dismissed:>6} of the {} candidates are hidden because you dismissed them",
+            candidates.len()
+        );
+    }
     println!(
         "  {hidden_stage:>6} of the {} candidates are hidden by startup mode ({})",
         candidates.len(),

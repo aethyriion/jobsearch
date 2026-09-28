@@ -256,6 +256,15 @@ pub struct JobRow {
     pub stage: Option<Stage>,
     pub headcount: Option<i64>,
     pub stage_source: Option<StageSource>,
+
+    /// Hidden from the list by you. A soft delete: the row and everything
+    /// attached to it survive, and restoring is a single keystroke.
+    pub dismissed: bool,
+    /// "job" or "company" — which kind of dismissal is hiding this row.
+    /// Worth distinguishing in the UI: restoring one posting and
+    /// un-blocking a whole employer are very different undos.
+    pub dismissed_scope: Option<&'static str>,
+    pub dismissed_reason: Option<String>,
 }
 
 impl JobRow {

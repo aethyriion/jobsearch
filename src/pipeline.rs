@@ -302,6 +302,12 @@ pub fn run_refilter(store: &Store, filters: &Filters, dry_run: bool) -> Result<R
     let mut summary = RefilterSummary::default();
 
     for row in store.filtered_out()? {
+        // A dismissed row stays dismissed. Without this, loosening a
+        // filter would quietly resurrect every posting you'd said no to —
+        // which is exactly the noise the dismissal was for.
+        if row.dismissed {
+            continue;
+        }
         summary.checked += 1;
         let job = row_as_job(&row);
         if filters.passes(&job) {
@@ -317,7 +323,7 @@ pub fn run_refilter(store: &Store, filters: &Filters, dry_run: bool) -> Result<R
         // never admitted by the filters in the first place, so letting a
         // filter tweak demote one would quietly delete an application from
         // your tracking list.
-        if row.is_manual() {
+        if row.is_manual() || row.dismissed {
             continue;
         }
         summary.checked += 1;
@@ -359,7 +365,11 @@ pub fn write_candidates_csv(store: &Store, path: impl AsRef<Path>) -> Result<usi
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let rows = store.all_candidates()?;
+    let rows: Vec<_> = store
+        .all_candidates()?
+        .into_iter()
+        .filter(|r| !r.dismissed)
+        .collect();
     let mut w = csv::Writer::from_path(path)?;
     w.write_record(["company", "title", "location", "stage", "url", "posted_at"])?;
     for r in &rows {
@@ -381,7 +391,11 @@ pub fn write_scored_csv(store: &Store, path: impl AsRef<Path>) -> Result<usize> 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let rows = store.scored()?;
+    let rows: Vec<_> = store
+        .scored()?
+        .into_iter()
+        .filter(|r| !r.dismissed)
+        .collect();
     let mut w = csv::Writer::from_path(path)?;
     w.write_record([
         "match_score",
