@@ -239,6 +239,10 @@ pub struct JobRow {
     pub description: String,
     pub source: String,
     pub fetched_at: Option<String>,
+    /// Whether this row currently passes the deterministic filters. Most
+    /// reads select only passing rows so this is redundant there, but
+    /// `diagnose` needs the whole funnel in one pass.
+    pub passed_filters: bool,
 
     pub match_score: Option<i64>,
     pub recommendation: Option<String>,
@@ -260,6 +264,10 @@ impl JobRow {
     /// on, not a missing value.
     pub fn ai_status(&self) -> &str {
         self.recommendation.as_deref().unwrap_or("unscored")
+    }
+
+    pub fn passed(&self) -> bool {
+        self.passed_filters
     }
 
     /// Whether you entered this by hand rather than a fetcher finding it.

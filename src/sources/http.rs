@@ -2,6 +2,7 @@
 //! extraction the aggregator full-JD fetch needs.
 
 use anyhow::{Context, Result};
+use serde::Deserialize;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -80,6 +81,24 @@ pub async fn get_text_following_redirects(
         .await
         .with_context(|| format!("reading body of {url}"))?;
     Ok((final_url, body))
+}
+
+/// Deserialize a field that may arrive as an explicit JSON `null`.
+///
+/// `#[serde(default)]` alone is not enough: it fires only for a MISSING
+/// key, not for a key present with a null value. Job boards emit both, and
+/// a single null in one posting aborts the parse for that company's ENTIRE
+/// board — Veracode's Greenhouse feed had exactly one job with
+/// `location.name: null`, which cost all 11 of its postings on every run.
+///
+/// Applied to every non-optional field in the source structs, because the
+/// failure is silent apart from one warning line in a run of 145 boards.
+pub fn null_to_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// Rough main-content extraction for a page with no structured API: drop

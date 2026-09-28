@@ -76,11 +76,11 @@ struct GhResponse {
 
 #[derive(Deserialize)]
 struct GhJob {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     title: String,
     #[serde(default)]
     location: Option<GhLocation>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     absolute_url: String,
     #[serde(default)]
     first_published: Option<String>,
@@ -92,7 +92,7 @@ struct GhJob {
 
 #[derive(Deserialize)]
 struct GhLocation {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     name: String,
 }
 
@@ -124,7 +124,7 @@ struct AshbyResponse {
 
 #[derive(Deserialize)]
 struct AshbyJob {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     title: String,
     #[serde(default)]
     location: Option<String>,
@@ -173,7 +173,7 @@ struct WorkableResponse {
 
 #[derive(Deserialize)]
 struct WorkableJob {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     title: String,
     #[serde(default)]
     location: Option<WorkableLocation>,
@@ -244,11 +244,15 @@ pub async fn fetch_workable(company: &str, slug: &str) -> Result<Vec<Job>> {
 
 #[derive(Deserialize)]
 struct LeverJob {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     text: String,
     #[serde(default)]
     categories: Option<LeverCategories>,
-    #[serde(default, rename = "hostedUrl")]
+    #[serde(
+        default,
+        rename = "hostedUrl",
+        deserialize_with = "http::null_to_default"
+    )]
     hosted_url: String,
     #[serde(default, rename = "createdAt")]
     created_at: Option<i64>,
@@ -313,7 +317,7 @@ struct SrResponse {
 struct SrPosting {
     #[serde(default)]
     id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     name: String,
     #[serde(default)]
     location: Option<SrLocation>,

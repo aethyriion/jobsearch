@@ -40,7 +40,11 @@ struct SearchResponse {
 
 #[derive(Deserialize)]
 struct Hit {
-    #[serde(default, rename = "objectID")]
+    #[serde(
+        default,
+        rename = "objectID",
+        deserialize_with = "http::null_to_default"
+    )]
     object_id: String,
     #[serde(default)]
     title: Option<String>,

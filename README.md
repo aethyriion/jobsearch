@@ -292,6 +292,7 @@ see where things stand without changing filters to count them.
 | `jobsearch refilter` | Re-apply the current `filters.yaml` to everything already stored, without re-fetching. Run it after editing filters. |
 | `jobsearch add` | Record an application by hand, for scripting. `--description-file -` reads the JD from stdin. The TUI's `a` key is the interactive version. |
 | `jobsearch inspect [URL]` | Print a stored job in full, or with no URL list recent rejections and why each was dropped. |
+| `jobsearch diagnose` | Where jobs die in the filter funnel, the daily intake rate, and which single config change reaches the most near-misses. Reads only what's stored; no network. |
 | `jobsearch check` | Validate every config file and report stage coverage. |
 
 Cost control on `evaluate` is deliberate: the queue respects the startup
@@ -326,6 +327,39 @@ RUN      r   fetch          e  score with Claude        F5  reload
 
 Status edits are written to SQLite on the keystroke, not batched — triage
 survives a crash, and the frozen web board sees it immediately.
+
+## "I'm not getting any new results"
+
+Two very different problems look identical from the review list, and
+`jobsearch diagnose` separates them:
+
+```
+INTAKE (jobs first seen, last 14 days)
+  2026-09-28     256 new     29 passed filters
+  2026-09-27     355 new     27 passed filters
+
+FUNNEL (15075 stored)
+     916 passed all filters  (6.1%)
+    6266 failed on title+location
+    5450 failed on location
+    1391 failed on title
+
+NEAR MISSES — failing exactly one check, so one config change reaches them
+    5450 location only   (right role, wrong place)
+    1391 title only      (right place, title didn't look like engineering)
+      29 stack only      (right role and place, JD tripped stack_dealbreakers)
+```
+
+**A re-run finding nothing new is the normal case.** Boards only change
+when companies post; running a fetch twice in a day will find nothing the
+second time. The intake rows tell you the real rate — if those are healthy
+and the pass rate is low, it's the filters. If intake itself is zero, it's
+the sources.
+
+The near-miss counts are the useful part: they're jobs one config change
+away, broken down by which single check they failed. `diagnose` lists the
+exact location strings and titles being dropped, so you can see whether
+widening would buy you roles you want or just noise.
 
 ## Configuration
 
