@@ -14,8 +14,7 @@
 # substring-matched — "Junior DevOps Engineer" contains "devops engineer",
 # and "Software Engineering Manager" contains "software engineer" — so
 # level/track mismatches have to be vetoed before that rescue happens.
-# (app/filters.py treats this key as optional; an empty list = no hard
-# exclusions.)
+# (optional; an empty list means no hard exclusions.)
 hard_exclusion_keywords:
   # LEVEL vetoes used to live here (intern, junior, entry level, new grad,
   # ...). They were moved out on 2026-09-25 and replaced by the `seniority:`

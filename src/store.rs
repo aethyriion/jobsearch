@@ -523,6 +523,36 @@ impl Store {
         )
     }
 
+    /// Every stored job, passed or rejected — the input for `diagnose`,
+    /// which has to see the whole funnel rather than either end of it.
+    pub fn all_stored(&self) -> Result<Vec<JobRow>> {
+        self.query_rows("", "ORDER BY jd.fetched_at DESC")
+    }
+
+    /// How many jobs were first seen in each of the last `days` days.
+    /// Answers "is the pipeline actually finding anything new" separately
+    /// from "are my filters too tight" — two very different problems that
+    /// look identical from the review list.
+    pub fn recent_intake(&self, days: i64) -> Result<Vec<(String, i64, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT date(sj.first_seen_at) AS d, \
+                    COUNT(*), \
+                    SUM(COALESCE(jd.passed_filters, 0)) \
+             FROM seen_jobs sj \
+             LEFT JOIN job_details jd ON jd.url = sj.url \
+             WHERE sj.first_seen_at >= date('now', ?1) \
+             GROUP BY d ORDER BY d DESC",
+        )?;
+        let rows = stmt.query_map([format!("-{days} days")], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get(1)?,
+                r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+            ))
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn filtered_out(&self) -> Result<Vec<JobRow>> {
         self.query_rows("WHERE jd.passed_filters = 0", "ORDER BY jd.fetched_at DESC")
     }
@@ -565,7 +595,7 @@ impl Store {
     ) -> Result<Vec<JobRow>> {
         let sql = format!(
             "SELECT jd.url, jd.company, jd.title, jd.location, jd.posted_at, jd.description, \
-                    jd.source, jd.fetched_at, \
+                    jd.source, jd.fetched_at, jd.passed_filters, \
                     ae.match_score, ae.recommendation, ae.genuine_gaps, \
                     ae.transferable_strengths, ae.risk_factors, \
                     us.my_status, us.notes \
@@ -585,13 +615,14 @@ impl Store {
                 description: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
                 source: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
                 fetched_at: r.get(7)?,
-                match_score: r.get(8)?,
-                recommendation: r.get(9)?,
-                genuine_gaps: r.get(10)?,
-                transferable_strengths: r.get(11)?,
-                risk_factors: r.get(12)?,
-                my_status: r.get(13)?,
-                notes: r.get(14)?,
+                passed_filters: r.get::<_, Option<i64>>(8)?.unwrap_or(0) != 0,
+                match_score: r.get(9)?,
+                recommendation: r.get(10)?,
+                genuine_gaps: r.get(11)?,
+                transferable_strengths: r.get(12)?,
+                risk_factors: r.get(13)?,
+                my_status: r.get(14)?,
+                notes: r.get(15)?,
                 ..Default::default()
             })
         })?;
@@ -854,6 +885,32 @@ mod tests {
             ..Default::default()
         }
         .with_url()
+    }
+
+    #[test]
+    fn passed_filters_round_trips_through_the_row() {
+        // The column is selected by index; forgetting it made every row
+        // report passed=false, which `diagnose` would have read as a 0%
+        // pass rate.
+        let s = store();
+        let kept = job("Kept", "Engineer", "https://a/1");
+        let dropped = job("Dropped", "Engineer", "https://a/2");
+        s.save_details(&kept, true).unwrap();
+        s.save_details(&dropped, false).unwrap();
+
+        let all = s.all_stored().unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().find(|r| r.company == "Kept").unwrap().passed());
+        assert!(!all
+            .iter()
+            .find(|r| r.company == "Dropped")
+            .unwrap()
+            .passed());
+        // And the other columns must not have shifted with the insertion.
+        let kept_row = all.iter().find(|r| r.company == "Kept").unwrap();
+        assert_eq!(kept_row.title, "Engineer");
+        assert_eq!(kept_row.location, "Remote - US");
+        assert_eq!(kept_row.source, "greenhouse");
     }
 
     #[test]

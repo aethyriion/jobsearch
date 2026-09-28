@@ -56,29 +56,29 @@ struct AdzunaResponse {
 
 #[derive(Deserialize)]
 struct AdzunaJob {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     title: String,
     #[serde(default)]
     location: Option<AdzunaLocation>,
     #[serde(default)]
     company: Option<AdzunaCompany>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     redirect_url: String,
     #[serde(default)]
     created: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     description: String,
 }
 
 #[derive(Deserialize)]
 struct AdzunaLocation {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     display_name: String,
 }
 
 #[derive(Deserialize)]
 struct AdzunaCompany {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     display_name: String,
 }
 
@@ -283,17 +283,17 @@ struct RemotiveResponse {
 
 #[derive(Deserialize)]
 struct RemotiveJob {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     company_name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     candidate_required_location: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     url: String,
     #[serde(default)]
     publication_date: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     description: String,
 }
 

@@ -152,6 +152,17 @@ enum Command {
         notes: Option<String>,
     },
 
+    /// Show where jobs die in the filter funnel — the answer to "are my
+    /// filters too tight". Reads only what's already stored; no network.
+    Diagnose {
+        /// How many examples to show per category.
+        #[arg(long, default_value_t = 12)]
+        examples: usize,
+        /// How many days of intake history to summarize.
+        #[arg(long, default_value_t = 14)]
+        days: i64,
+    },
+
     /// Validate every config file and report what's known about stages.
     Check,
 }
@@ -238,6 +249,7 @@ async fn async_main() -> Result<()> {
                 notes,
             },
         ),
+        Command::Diagnose { examples, days } => cmd_diagnose(&paths, examples, days),
         Command::Check => cmd_check(&paths),
     }
 }
@@ -357,6 +369,29 @@ async fn cmd_fetch(
         "\nTotal fetched: {}  |  new candidates after filters+dedup: {}  |  sources failed: {}",
         summary.fetched, summary.new_candidates, summary.sources_failed
     );
+
+    // Reprinted at the end because the inline warnings scroll past in a
+    // 145-board run, and a board that has quietly 404'd costs you that
+    // company on every future run until someone notices.
+    if !summary.failures.is_empty() {
+        println!("\nFAILED SOURCES — these returned nothing this run:");
+        for (name, error) in &summary.failures {
+            println!("  {name}: {}", truncate(error, 110));
+        }
+        println!("  A 404 usually means the slug moved or the board closed. Check one with");
+        println!(
+            "  `jobsearch fetch --company <slug>`, then fix or remove its companies.yaml entry."
+        );
+    }
+
+    if summary.new_candidates == 0 && summary.fetched > 0 {
+        // The single most common confusion with this tool: a re-run that
+        // finds nothing looks broken and almost never is.
+        println!("\nNothing new this run.");
+        println!("Boards only change when companies post, so a re-run within a day of the last");
+        println!("one normally finds nothing. `jobsearch diagnose` shows the daily intake rate");
+        println!("and where jobs are being filtered out.");
+    }
 
     if !skip_discovery && !summary.discovered.is_empty() {
         let added = discover::append_new_companies(
@@ -813,6 +848,172 @@ fn cmd_add(paths: &Paths, args: AddArgs) -> Result<()> {
         println!("  stage {}", stage.as_str());
     }
     println!("\nIt shows inline in the TUI and is queued for `jobsearch evaluate`.");
+    Ok(())
+}
+
+// --------------------------------------------------------------- diagnose
+
+fn cmd_diagnose(paths: &Paths, examples: usize, days: i64) -> Result<()> {
+    let filters = load_filters(paths)?;
+    let store = Store::open(paths.db())?;
+    let rows = store.all_stored()?;
+
+    if rows.is_empty() {
+        println!("Nothing stored yet — run `jobsearch fetch` first.");
+        return Ok(());
+    }
+
+    // ---- intake: is anything NEW arriving at all? ---------------------
+    //
+    // Deliberately first. "I'm not seeing new results" has two completely
+    // different causes — nothing is arriving, or everything arriving is
+    // being filtered out — and they need opposite fixes. Every other
+    // section here is about the second; this one tells you whether that's
+    // even the right question.
+    println!("INTAKE (jobs first seen, last {days} days)");
+    let intake = store.recent_intake(days)?;
+    if intake.is_empty() {
+        println!("  nothing new in {days} days.");
+    } else {
+        for (day, seen, passed) in &intake {
+            println!("  {day}   {seen:>5} new   {passed:>4} passed filters");
+        }
+    }
+    let total_new: i64 = intake.iter().map(|(_, n, _)| n).sum();
+    println!("  ---");
+    println!(
+        "  {total_new} new postings in {days} days, out of {} stored.",
+        rows.len()
+    );
+    println!(
+        "  Boards only change when companies post; a re-run finding nothing new is the\n           normal case, not a bug. Dedup is on URL and on company+title+location.\n"
+    );
+
+    // ---- the funnel ---------------------------------------------------
+    let passed = rows.iter().filter(|r| r.passed()).count();
+    let mut by_reason: std::collections::HashMap<String, usize> = Default::default();
+    let mut title_only: Vec<&model::JobRow> = Vec::new();
+    let mut location_only: Vec<&model::JobRow> = Vec::new();
+    let mut stack_only: Vec<&model::JobRow> = Vec::new();
+    let mut rejected_locations: std::collections::HashMap<String, usize> = Default::default();
+    let mut rejected_titles: std::collections::HashMap<String, usize> = Default::default();
+
+    for row in &rows {
+        let job = model::Job {
+            title: row.title.clone(),
+            location: row.location.clone(),
+            description: row.description.clone(),
+            ..Default::default()
+        };
+        let reasons = filters.rejection_reasons(&job);
+        if reasons.is_empty() {
+            continue;
+        }
+        *by_reason.entry(reasons.join("+")).or_default() += 1;
+        // A job failing exactly ONE check is a near miss: one config
+        // change away from being a candidate. Those are where loosening
+        // actually buys you something.
+        match reasons.as_slice() {
+            ["title"] => title_only.push(row),
+            ["location"] => {
+                location_only.push(row);
+                *rejected_locations.entry(row.location.clone()).or_default() += 1;
+            }
+            ["stack"] => stack_only.push(row),
+            _ => {}
+        }
+        if reasons.contains(&"title") {
+            *rejected_titles.entry(row.title.clone()).or_default() += 1;
+        }
+    }
+
+    println!("FUNNEL ({} stored)", rows.len());
+    println!(
+        "  {passed:>6} passed all filters  ({:.1}%)",
+        passed as f64 / rows.len() as f64 * 100.0
+    );
+    let mut reasons: Vec<_> = by_reason.iter().collect();
+    reasons.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
+    for (reason, n) in reasons {
+        println!("  {n:>6} failed on {reason}");
+    }
+
+    // ---- near misses --------------------------------------------------
+    println!("\nNEAR MISSES — failing exactly one check, so one config change reaches them");
+    println!(
+        "  {:>6} location only   (right role, wrong place)",
+        location_only.len()
+    );
+    println!(
+        "  {:>6} title only      (right place, title didn't look like engineering)",
+        title_only.len()
+    );
+    println!(
+        "  {:>6} stack only      (right role and place, JD tripped stack_dealbreakers)",
+        stack_only.len()
+    );
+
+    if !location_only.is_empty() {
+        println!("\n  Top locations that failed ONLY on location:");
+        let mut locs: Vec<_> = rejected_locations.into_iter().collect();
+        locs.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        for (loc, n) in locs.into_iter().take(examples) {
+            println!("    {n:>4}  {}", truncate(&loc, 70));
+        }
+        println!("    -> widen filters.yaml's location_allow_patterns to take any of these.");
+    }
+
+    if !stack_only.is_empty() {
+        println!("\n  Failed ONLY on stack (a dealbreaker language, none of stack_core):");
+        for row in stack_only.iter().take(examples) {
+            println!(
+                "    {:<24} | {}",
+                truncate(&row.company, 24),
+                truncate(&row.title, 58)
+            );
+        }
+        println!(
+            "    -> if these look fine, the JD mentions a stack_dealbreakers language in\n                    passing. Move that language to stack_core, or drop it."
+        );
+    }
+
+    if !title_only.is_empty() {
+        println!("\n  Failed ONLY on title (location was fine):");
+        let mut titles: Vec<_> = rejected_titles
+            .into_iter()
+            .filter(|(t, _)| title_only.iter().any(|r| &r.title == t))
+            .collect();
+        titles.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        for (title, n) in titles.into_iter().take(examples) {
+            println!("    {n:>4}  {}", truncate(&title, 70));
+        }
+        println!(
+            "    -> add a keyword to title_allow_keywords, or remove one from\n                    exclusion_keywords / hard_exclusion_keywords."
+        );
+    }
+
+    // ---- what the view filters hide on top ----------------------------
+    let candidates: Vec<&model::JobRow> = rows.iter().filter(|r| r.passed()).collect();
+    let hidden_stage = candidates
+        .iter()
+        .filter(|r| !filters.startup.admits(r))
+        .count();
+    let hidden_level = candidates
+        .iter()
+        .filter(|r| !filters.seniority.admits(r))
+        .count();
+    println!("\nVIEW FILTERS (applied on top, in the TUI — nothing is deleted)");
+    println!(
+        "  {hidden_stage:>6} of the {} candidates are hidden by startup mode ({})",
+        candidates.len(),
+        filters.startup.describe()
+    );
+    println!(
+        "  {hidden_level:>6} are hidden by the level policy ({})",
+        filters.seniority.describe()
+    );
+    println!("    -> `s` and `L` in the TUI toggle these without touching any config.");
+
     Ok(())
 }
 

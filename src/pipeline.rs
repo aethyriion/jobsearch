@@ -65,6 +65,12 @@ pub struct RunSummary {
     pub sources_ok: usize,
     pub sources_failed: usize,
     pub discovered: Vec<NewCompany>,
+    /// `(source name, error)` for everything that failed. Collected as
+    /// well as reported through `Progress` so the caller can reprint them
+    /// at the END of a run: a warning emitted inline among 145 board lines
+    /// scrolls past unread, and a board that 404s silently costs you that
+    /// company on every future run too.
+    pub failures: Vec<(String, String)>,
 }
 
 /// Fetch everything, filter and dedup it, and store the result.
@@ -111,6 +117,9 @@ where
             }
             Err(e) => {
                 summary.sources_failed += 1;
+                summary
+                    .failures
+                    .push((company.name.clone(), format!("{e:#}")));
                 progress(Progress::SourceFailed {
                     name: company.name.clone(),
                     error: format!("{e:#}"),
@@ -147,6 +156,7 @@ where
             }
             Err(e) => {
                 summary.sources_failed += 1;
+                summary.failures.push((agg.name.clone(), format!("{e:#}")));
                 progress(Progress::SourceFailed {
                     name: agg.name.clone(),
                     error: format!("{e:#}"),

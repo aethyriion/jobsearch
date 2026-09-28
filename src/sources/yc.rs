@@ -28,23 +28,23 @@ const COMPANIES_URL: &str = "https://yc-oss.github.io/api/companies/hiring.json"
 
 #[derive(Debug, Deserialize)]
 pub struct YcCompany {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     pub slug: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     pub website: String,
     #[serde(default)]
     pub team_size: Option<i64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     pub batch: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     pub stage: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     pub status: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     pub regions: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "http::null_to_default")]
     pub one_liner: String,
     #[serde(default, rename = "isHiring")]
     pub is_hiring: bool,
