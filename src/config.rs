@@ -17,6 +17,7 @@ pub const COMPANIES_PATH: &str = "companies.yaml";
 pub const AGGREGATORS_PATH: &str = "aggregators.yaml";
 pub const FILTERS_PATH: &str = "filters.yaml";
 pub const PROFILE_PATH: &str = "profile.yaml";
+pub const TECH_PATH: &str = "tech.yaml";
 pub const DB_PATH: &str = "data/seen_jobs.sqlite3";
 
 // ---------------------------------------------------------------- companies
@@ -309,6 +310,9 @@ impl Paths {
     }
     pub fn profile(&self) -> PathBuf {
         self.root.join(PROFILE_PATH)
+    }
+    pub fn tech(&self) -> PathBuf {
+        self.root.join(TECH_PATH)
     }
     pub fn db(&self) -> PathBuf {
         std::env::var("DB_PATH")

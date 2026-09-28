@@ -13,6 +13,7 @@ mod model;
 mod pipeline;
 mod sources;
 mod store;
+mod tech;
 mod tui;
 
 use anyhow::{Context, Result};
@@ -178,6 +179,23 @@ enum Command {
     /// List everything currently hidden.
     Dismissed,
 
+    /// What technologies your candidates actually mention — the split
+    /// between AWS and GCP, who uses Rust, and so on. Deterministic: this
+    /// reads `tech.yaml`'s patterns over stored descriptions, with no
+    /// model and no network.
+    Tech {
+        /// List the postings matching this tag instead of the summary.
+        /// Accepts `aws` or `cloud:aws`.
+        #[arg(long, value_name = "TAG")]
+        tag: Option<String>,
+        /// With --tag: how many postings to list.
+        #[arg(long, default_value_t = 30)]
+        limit: usize,
+        /// Include dismissed postings.
+        #[arg(long)]
+        include_dismissed: bool,
+    },
+
     /// Show where jobs die in the filter funnel — the answer to "are my
     /// filters too tight". Reads only what's already stored; no network.
     Diagnose {
@@ -213,7 +231,13 @@ async fn async_main() -> Result<()> {
     match cli.command.unwrap_or(Command::Tui) {
         Command::Tui => {
             let filters = load_filters(&paths)?;
-            tui::run(paths, filters).await
+            let tech = tech::TechDetector::load(paths.tech()).unwrap_or_else(|e| {
+                if paths.tech().exists() {
+                    eprintln!("[WARN] tech.yaml: {e:#} — continuing without tech detection.");
+                }
+                tech::TechDetector::empty()
+            });
+            tui::run(paths, filters, tech).await
         }
         Command::Fetch {
             company,
@@ -282,6 +306,11 @@ async fn async_main() -> Result<()> {
         } => cmd_dismiss(&paths, url, company, reason),
         Command::Restore { url, company } => cmd_restore(&paths, url, company),
         Command::Dismissed => cmd_dismissed(&paths),
+        Command::Tech {
+            tag,
+            limit,
+            include_dismissed,
+        } => cmd_tech(&paths, tag, limit, include_dismissed),
         Command::Diagnose { examples, days } => cmd_diagnose(&paths, examples, days),
         Command::Check => cmd_check(&paths),
     }
@@ -290,6 +319,27 @@ async fn async_main() -> Result<()> {
 fn load_filters(paths: &Paths) -> Result<Filters> {
     let cfg = config::load_filters(paths.filters())?;
     Filters::compile(&cfg)
+}
+
+/// Open the store with tech detection wired in.
+///
+/// Every caller goes through this rather than `Store::open` directly, so
+/// there's no way to end up with a store whose rows are silently untagged.
+/// A missing or broken `tech.yaml` degrades to no tags with a warning
+/// rather than failing the command — detection is an enhancement, and
+/// losing it shouldn't stop you fetching jobs.
+fn open_store(paths: &Paths) -> Result<Store> {
+    let tech = match tech::TechDetector::load(paths.tech()) {
+        Ok(t) => t,
+        Err(e) => {
+            if paths.tech().exists() {
+                eprintln!("[WARN] tech.yaml: {e:#}");
+                eprintln!("       continuing without tech detection.");
+            }
+            tech::TechDetector::empty()
+        }
+    };
+    Ok(Store::open(paths.db())?.with_tech(tech))
 }
 
 // ------------------------------------------------------------------ fetch
@@ -305,7 +355,7 @@ async fn cmd_fetch(
     concurrency: usize,
 ) -> Result<()> {
     let filters = load_filters(paths)?;
-    let store = Store::open(paths.db())?;
+    let store = open_store(paths)?;
 
     let mut companies = if skip_companies {
         Vec::new()
@@ -472,7 +522,7 @@ async fn cmd_evaluate(
     all_stages: bool,
 ) -> Result<()> {
     let filters = load_filters(paths)?;
-    let store = Store::open(paths.db())?;
+    let store = open_store(paths)?;
     let startup_only = !all_stages && filters.startup.enabled_by_default;
 
     let policy = startup_only.then_some(&filters.startup);
@@ -556,7 +606,7 @@ async fn cmd_evaluate(
 
 fn cmd_refilter(paths: &Paths, dry_run: bool) -> Result<()> {
     let filters = load_filters(paths)?;
-    let store = Store::open(paths.db())?;
+    let store = open_store(paths)?;
     let summary = pipeline::run_refilter(&store, &filters, dry_run)?;
 
     for (company, title, url) in &summary.rescued {
@@ -594,7 +644,7 @@ async fn cmd_discover_yc(
     stages_only: bool,
     recheck: bool,
 ) -> Result<()> {
-    let store = Store::open(paths.db())?;
+    let store = open_store(paths)?;
 
     println!("Fetching the YC company directory…");
     let all = sources::yc::fetch_directory().await?;
@@ -709,7 +759,7 @@ async fn cmd_discover_yc(
 
 fn cmd_inspect(paths: &Paths, url: Option<String>, limit: usize) -> Result<()> {
     let filters = load_filters(paths)?;
-    let store = Store::open(paths.db())?;
+    let store = open_store(paths)?;
 
     let Some(url) = url else {
         for row in store.filtered_out()?.into_iter().take(limit) {
@@ -814,7 +864,7 @@ struct AddArgs {
 }
 
 fn cmd_add(paths: &Paths, args: AddArgs) -> Result<()> {
-    let store = Store::open(paths.db())?;
+    let store = open_store(paths)?;
 
     let description = match args.description_file.as_deref() {
         Some("-") => {
@@ -892,7 +942,7 @@ fn cmd_dismiss(
     company: Option<String>,
     reason: Option<String>,
 ) -> Result<()> {
-    let store = Store::open(paths.db())?;
+    let store = open_store(paths)?;
     match (url, company) {
         (Some(url), _) => {
             let row = store
@@ -913,7 +963,7 @@ fn cmd_dismiss(
 }
 
 fn cmd_restore(paths: &Paths, url: Option<String>, company: Option<String>) -> Result<()> {
-    let store = Store::open(paths.db())?;
+    let store = open_store(paths)?;
     match (url, company) {
         (Some(url), _) => {
             store.restore_job(&url)?;
@@ -929,7 +979,7 @@ fn cmd_restore(paths: &Paths, url: Option<String>, company: Option<String>) -> R
 }
 
 fn cmd_dismissed(paths: &Paths) -> Result<()> {
-    let store = Store::open(paths.db())?;
+    let store = open_store(paths)?;
     let companies = store.dismissed_company_list()?;
     let rows: Vec<_> = store
         .all_stored()?
@@ -974,11 +1024,97 @@ fn cmd_dismissed(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
+// ------------------------------------------------------------------ tech
+
+fn cmd_tech(
+    paths: &Paths,
+    tag: Option<String>,
+    limit: usize,
+    include_dismissed: bool,
+) -> Result<()> {
+    let store = open_store(paths)?;
+    if store.tech().is_empty() {
+        anyhow::bail!(
+            "no technologies configured — {} is missing or failed to load",
+            paths.tech().display()
+        );
+    }
+    let rows: Vec<_> = store
+        .all_candidates()?
+        .into_iter()
+        .filter(|r| include_dismissed || !r.dismissed)
+        .collect();
+
+    // --- one tag: list the postings ------------------------------------
+    if let Some(needle) = tag {
+        let Some(tag) = store.tech().resolve(&needle).cloned() else {
+            anyhow::bail!("unknown tag {needle:?}. `jobsearch tech` lists what's available.");
+        };
+        let matching: Vec<_> = rows.iter().filter(|r| r.has_tech(&tag)).collect();
+        println!(
+            "{} of {} candidates mention {}\n",
+            matching.len(),
+            rows.len(),
+            tag.qualified()
+        );
+        for r in matching.iter().take(limit) {
+            println!(
+                "  {:>3}  {:<24} | {:<46} | {}",
+                r.match_score
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "–".into()),
+                truncate(&r.company, 24),
+                truncate(&r.title, 46),
+                r.tech_summary(5)
+            );
+        }
+        if matching.len() > limit {
+            println!("  … and {} more", matching.len() - limit);
+        }
+        return Ok(());
+    }
+
+    // --- the summary ----------------------------------------------------
+    let mut counts: std::collections::HashMap<&tech::Tag, usize> = Default::default();
+    for row in &rows {
+        for t in &row.tech {
+            *counts.entry(t).or_default() += 1;
+        }
+    }
+    let untagged = rows.iter().filter(|r| r.tech.is_empty()).count();
+
+    println!(
+        "{} candidates · {} carry at least one tag · {untagged} untagged\n",
+        rows.len(),
+        rows.len() - untagged
+    );
+
+    // Grouped by category, because the comparisons that matter are
+    // within one — AWS vs GCP, Rust vs Java — not across.
+    let mut category = "";
+    for t in store.tech().all_tags() {
+        let n = counts.get(t).copied().unwrap_or(0);
+        if n == 0 {
+            continue;
+        }
+        if t.category != category {
+            category = &t.category;
+            println!("{}", category.to_uppercase());
+        }
+        let pct = n as f64 / rows.len().max(1) as f64 * 100.0;
+        let bar = "█".repeat((pct / 2.0).round() as usize);
+        println!("  {:<16} {n:>5}  {pct:>5.1}%  {bar}", t.name);
+    }
+    println!("\n`jobsearch tech --tag rust` lists the postings for one tag.");
+    println!("In the TUI, `t` opens the same list as a picker.");
+    Ok(())
+}
+
 // --------------------------------------------------------------- diagnose
 
 fn cmd_diagnose(paths: &Paths, examples: usize, days: i64) -> Result<()> {
     let filters = load_filters(paths)?;
-    let store = Store::open(paths.db())?;
+    let store = open_store(paths)?;
     let rows = store.all_stored()?;
 
     if rows.is_empty() {
@@ -1221,6 +1357,14 @@ fn cmd_check(paths: &Paths) -> Result<()> {
         }
     );
 
+    match tech::TechDetector::load(paths.tech()) {
+        Ok(t) => println!("tech.yaml         {} technologies", t.tag_count()),
+        Err(e) => {
+            println!("tech.yaml         ! {e}");
+            println!("                    (tech detection disabled; everything else still works)");
+        }
+    }
+
     match config::load_profile(paths.profile()) {
         Ok(_) => println!("profile.yaml      OK"),
         Err(e) => {
@@ -1229,7 +1373,7 @@ fn cmd_check(paths: &Paths) -> Result<()> {
         }
     }
 
-    match Store::open(paths.db()) {
+    match open_store(paths) {
         Ok(store) => {
             let all = store.all_candidates()?;
             let startup = all.iter().filter(|r| filters.startup.admits(r)).count();

@@ -28,6 +28,8 @@ pub enum Mode {
     ConfirmDismissJob,
     /// Confirming dismissal of every posting from the selected employer.
     ConfirmDismissCompany,
+    /// Picking a technology to filter by.
+    TechPicker,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,6 +293,15 @@ pub struct App {
     /// First key of a pending two-key sequence in the list (`dd`).
     pub pending_key: Option<char>,
 
+    /// The tech tag currently filtering the list, if any.
+    pub tech_filter: Option<crate::tech::Tag>,
+    /// Picker state: the tags present in the data with their counts,
+    /// highest first, plus the cursor.
+    pub tech_choices: Vec<(crate::tech::Tag, usize)>,
+    pub tech_cursor: usize,
+    /// Incremental filter typed into the picker.
+    pub tech_query: String,
+
     /// Live only in `Mode::Form`. Held here rather than in the event loop
     /// so a redraw tick can render a half-filled form without it being
     /// threaded through every call.
@@ -325,6 +336,10 @@ impl App {
             should_quit: false,
             table_state: TableState::default(),
             pending_key: None,
+            tech_filter: None,
+            tech_choices: Vec::new(),
+            tech_cursor: 0,
+            tech_query: String::new(),
             form: None,
         };
         app.recompute();
@@ -367,6 +382,11 @@ impl App {
                 }
                 if !self.level_filter.matches(row, &self.seniority_policy) {
                     return false;
+                }
+                if let Some(tag) = &self.tech_filter {
+                    if !row.has_tech(tag) {
+                        return false;
+                    }
                 }
                 if !self.ai_filter.matches(row) {
                     return false;
@@ -478,6 +498,73 @@ impl App {
         self.ai_filter = self.ai_filter.next();
         self.recompute();
         self.status = format!("AI filter: {}", self.ai_filter.label());
+    }
+
+    /// Open the technology picker, populated from what's actually in the
+    /// data rather than from the full config.
+    ///
+    /// Showing only tags that appear, with counts, is the difference
+    /// between a useful list and 45 entries most of which match nothing —
+    /// and the counts themselves answer "AWS or GCP?" before you even
+    /// pick one.
+    pub fn open_tech_picker(&mut self) {
+        let mut counts: std::collections::HashMap<crate::tech::Tag, usize> = Default::default();
+        for row in &self.rows {
+            if row.dismissed {
+                continue;
+            }
+            for tag in &row.tech {
+                *counts.entry(tag.clone()).or_default() += 1;
+            }
+        }
+        let mut choices: Vec<_> = counts.into_iter().collect();
+        choices.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        self.tech_choices = choices;
+        self.tech_cursor = 0;
+        self.tech_query.clear();
+        self.mode = Mode::TechPicker;
+    }
+
+    /// The picker rows matching what's been typed so far.
+    pub fn tech_visible(&self) -> Vec<(crate::tech::Tag, usize)> {
+        let q = self.tech_query.to_lowercase();
+        self.tech_choices
+            .iter()
+            .filter(|(tag, _)| q.is_empty() || tag.qualified().contains(&q))
+            .cloned()
+            .collect()
+    }
+
+    pub fn tech_move(&mut self, delta: isize) {
+        let len = self.tech_visible().len();
+        if len == 0 {
+            return;
+        }
+        self.tech_cursor = (self.tech_cursor as isize + delta).clamp(0, len as isize - 1) as usize;
+    }
+
+    pub fn tech_select(&mut self) {
+        let visible = self.tech_visible();
+        if let Some((tag, n)) = visible.get(self.tech_cursor) {
+            self.status = format!("tech: {} ({n} postings)", tag.qualified());
+            self.tech_filter = Some(tag.clone());
+        }
+        self.mode = Mode::Normal;
+        self.recompute();
+    }
+
+    pub fn clear_tech_filter(&mut self) {
+        self.tech_filter = None;
+        self.mode = Mode::Normal;
+        self.status = "tech filter cleared".into();
+        self.recompute();
+    }
+
+    pub fn tech_label(&self) -> String {
+        self.tech_filter
+            .as_ref()
+            .map(|t| t.name.clone())
+            .unwrap_or_else(|| "any".into())
     }
 
     pub fn cycle_level_filter(&mut self) {

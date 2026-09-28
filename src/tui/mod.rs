@@ -57,8 +57,8 @@ enum TaskMessage {
     Failed { label: String, error: String },
 }
 
-pub async fn run(paths: Paths, filters: Filters) -> Result<()> {
-    let store = Store::open(paths.db())?;
+pub async fn run(paths: Paths, filters: Filters, tech: crate::tech::TechDetector) -> Result<()> {
+    let store = Store::open(paths.db())?.with_tech(tech);
     let rows = store.all_candidates()?;
     let mut app = App::new(rows, filters.startup.clone(), filters.seniority.clone());
     app.status = format!(
@@ -285,6 +285,35 @@ fn handle_key(
             }
             return Ok(());
         }
+        Mode::TechPicker => {
+            match key.code {
+                KeyCode::Esc => {
+                    app.mode = Mode::Normal;
+                }
+                KeyCode::Enter => app.tech_select(),
+                // `0` clears rather than selecting — the fastest way back
+                // to the unfiltered list from inside the picker.
+                KeyCode::Char('0') if app.tech_query.is_empty() => app.clear_tech_filter(),
+                KeyCode::Down | KeyCode::Tab => app.tech_move(1),
+                KeyCode::Up | KeyCode::BackTab => app.tech_move(-1),
+                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.tech_move(1)
+                }
+                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.tech_move(-1)
+                }
+                KeyCode::Backspace => {
+                    app.tech_query.pop();
+                    app.tech_cursor = 0;
+                }
+                KeyCode::Char(c) => {
+                    app.tech_query.push(c);
+                    app.tech_cursor = 0;
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
         Mode::ConfirmDismissJob => {
             match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => app.dismiss_selected_job(store)?,
@@ -348,6 +377,8 @@ fn handle_key(
         KeyCode::Char('f') => app.cycle_ai_filter(),
         KeyCode::Char('m') => app.cycle_my_filter(),
         KeyCode::Char('L') => app.cycle_level_filter(),
+        KeyCode::Char('t') => app.open_tech_picker(),
+        KeyCode::Char('T') => app.clear_tech_filter(),
         KeyCode::Char('S') => app.cycle_sort(),
         KeyCode::Char('R') => app.toggle_sort_dir(),
 
@@ -439,7 +470,10 @@ fn spawn_fetch(
 
     spawn_blocking_run(move || async move {
         let result = async {
-            let store = Store::open(paths.db())?;
+            let store = Store::open(paths.db())?.with_tech(
+                crate::tech::TechDetector::load(paths.tech())
+                    .unwrap_or_else(|_| crate::tech::TechDetector::empty()),
+            );
             let filters = Filters::compile(&crate::config::load_filters(paths.filters())?)?;
             let companies = crate::config::load_companies(paths.companies())?;
             let aggs = crate::config::load_aggregators(paths.aggregators())?;
@@ -504,7 +538,10 @@ fn spawn_evaluate(
 
     spawn_blocking_run(move || async move {
         let result = async {
-            let store = Store::open(paths.db())?;
+            let store = Store::open(paths.db())?.with_tech(
+                crate::tech::TechDetector::load(paths.tech())
+                    .unwrap_or_else(|_| crate::tech::TechDetector::empty()),
+            );
             let filters = Filters::compile(&crate::config::load_filters(paths.filters())?)?;
             let profile = crate::config::load_profile(paths.profile())?;
             let evaluator =

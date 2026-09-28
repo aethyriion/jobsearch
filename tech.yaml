@@ -1,0 +1,184 @@
+# Deterministic tech-stack detection.
+#
+# Every tag here is matched against the job description with a plain
+# regex — no AI, no cost, no network. The result is a set of tags per
+# posting that the TUI filters on (`t`) and `jobsearch tech` summarizes,
+# so questions like "which of these are AWS and which are GCP" or "who
+# actually uses Rust" are answerable without spending a token.
+#
+# This is derived, never stored: tags are recomputed from the stored
+# description every time the database is read. Improving a pattern below
+# takes effect on the next run with no migration and no re-fetch.
+#
+# ---------------------------------------------------------------------------
+# WRITING PATTERNS
+# ---------------------------------------------------------------------------
+# Patterns are case-INSENSITIVE by default. Set `case_sensitive: true` for
+# tags whose name is also an ordinary English word — that flag is the whole
+# reason Go and R are usable tags at all:
+#
+#   \bgo\b   case-insensitively matches "go to market", "go fast", "let's go"
+#   \bGo\b   case-sensitively matches the language and almost nothing else,
+#            because mid-sentence capitalization is the signal
+#
+# Other traps already handled below:
+#   - \bjava\b does NOT match "javascript" (no word boundary before the "s")
+#   - \bc\+\+  has NO trailing \b: '+' is not a word character, so a trailing
+#     \b can never match. Same for C#. (This bit filters.yaml for real —
+#     see the note there.)
+#   - "ECS"/"EKS"/"GKE" are unambiguous acronyms; "EC2" needs the digit.
+
+categories:
+  # -------------------------------------------------------------------
+  - name: language
+    tags:
+      - name: rust
+        patterns: ['\brust\b', '\brustlang\b']
+      - name: go
+        case_sensitive: true
+        patterns: ['\bGo\b', '\bGolang\b', '\bgolang\b']
+      - name: python
+        patterns: ['\bpython\b']
+      - name: typescript
+        # NOT '\bts\b': it matches "TS/SCI" and "active TS (Top Secret
+        # Clearance)", which are security clearances, not a language.
+        patterns: ['\btypescript\b', '\bts/node\b']
+      - name: javascript
+        patterns: ['\bjavascript\b', '\bnode\.?js\b']
+      - name: java
+        patterns: ['\bjava\b', '\bkotlin\b', '\bjvm\b', '\bspring boot\b']
+      - name: c-sharp
+        patterns: ['\bc#', '\b\.net\b', '\bdotnet\b', '\basp\.net\b']
+      - name: cpp
+        patterns: ['\bc\+\+', '\bcpp\b']
+      - name: ruby
+        patterns: ['\bruby\b', '\brails\b']
+      - name: php
+        patterns: ['\bphp\b', '\blaravel\b']
+      - name: elixir
+        patterns: ['\belixir\b', '\bphoenix framework\b', '\berlang\b']
+      - name: scala
+        patterns: ['\bscala\b']
+      - name: swift
+        patterns: ['\bswift\b', '\bswiftui\b']
+      - name: bash
+        patterns: ['\bbash\b', '\bshell scripting\b', '\bzsh\b']
+
+  # -------------------------------------------------------------------
+  - name: cloud
+    tags:
+      - name: aws
+        patterns:
+          - '\baws\b'
+          - '\bamazon web services\b'
+          - '\bec2\b'
+          - '\beks\b'
+          - '\becs\b'
+          - '\bs3\b'
+          - '\blambda\b'
+          - '\bdynamodb\b'
+          - '\bcloudformation\b'
+      - name: gcp
+        patterns:
+          - '\bgcp\b'
+          - '\bgoogle cloud\b'
+          - '\bgke\b'
+          - '\bbigquery\b'
+          - '\bcloud run\b'
+          - '\bpub/?sub\b'
+          - '\bspanner\b'
+      - name: azure
+        patterns: ['\bazure\b', '\baks\b', '\bcosmos ?db\b']
+      - name: on-prem
+        patterns: ['\bon[- ]?prem(?:ise|ises)?\b', '\bbare[- ]metal\b', '\bcolo(?:cation)?\b', '\bdata ?cent(?:er|re)s?\b']
+      - name: cloudflare
+        # NOT a bare '\bworkers\b': in the live database that matched
+        # "unincorporated Los Angeles County workers" and "ensure workers
+        # return home safely" far more often than the Cloudflare product.
+        patterns: ['\bcloudflare\b', '\bcloudflare workers\b', '\bwrangler\b']
+
+  # -------------------------------------------------------------------
+  - name: platform
+    tags:
+      - name: kubernetes
+        patterns: ['\bkubernetes\b', '\bk8s\b', '\bhelm\b', '\bkubectl\b', '\bistio\b', '\bargo ?cd\b']
+      - name: docker
+        # 'containerized'/'containerization' are strong signals; a bare
+        # "container" is not — it turns up inside HTML ids that survive
+        # entity decoding, and in plenty of non-technical senses.
+        patterns: ['\bdocker\b', '\bcontaineri[sz](?:ed|ation)\b', '\bpodman\b', '\boci images?\b']
+      - name: serverless
+        patterns: ['\bserverless\b', '\bfargate\b', '\bcloud functions\b']
+      - name: nomad
+        patterns: ['\bnomad\b']
+      - name: linux
+        patterns: ['\blinux\b', '\bunix\b', '\bebpf\b', '\bsystemd\b']
+
+  # -------------------------------------------------------------------
+  - name: iac
+    tags:
+      - name: terraform
+        patterns: ['\bterraform\b', '\bopentofu\b', '\bhcl\b']
+      - name: pulumi
+        patterns: ['\bpulumi\b']
+      - name: cdk
+        patterns: ['\bcdk\b', '\bcdktf\b']
+      - name: ansible
+        patterns: ['\bansible\b', '\bchef\b', '\bpuppet\b', '\bsaltstack\b']
+      - name: nix
+        patterns: ['\bnix\b', '\bnixos\b']
+
+  # -------------------------------------------------------------------
+  - name: ci
+    tags:
+      - name: github-actions
+        patterns: ['\bgithub actions\b']
+      - name: gitlab-ci
+        patterns: ['\bgitlab ci\b', '\bgitlab-ci\b']
+      - name: circleci
+        patterns: ['\bcircleci\b', '\bcircle ci\b']
+      - name: jenkins
+        patterns: ['\bjenkins\b']
+      - name: buildkite
+        patterns: ['\bbuildkite\b', '\bdrone ci\b', '\bteamcity\b']
+
+  # -------------------------------------------------------------------
+  - name: observability
+    tags:
+      - name: prometheus
+        patterns: ['\bprometheus\b', '\bgrafana\b', '\bthanos\b', '\bmimir\b']
+      - name: datadog
+        patterns: ['\bdatadog\b', '\bnew relic\b', '\bdynatrace\b', '\bsplunk\b']
+      - name: opentelemetry
+        patterns: ['\bopen ?telemetry\b', '\botel\b', '\bjaeger\b', '\bhoneycomb\b']
+
+  # -------------------------------------------------------------------
+  - name: data
+    tags:
+      - name: postgres
+        patterns: ['\bpostgres(?:ql)?\b', '\bcockroach ?db\b', '\btimescale\b']
+      - name: mysql
+        patterns: ['\bmysql\b', '\bmariadb\b', '\bplanetscale\b']
+      - name: kafka
+        patterns: ['\bkafka\b', '\bpulsar\b', '\bnats\b', '\brabbitmq\b']
+      - name: redis
+        patterns: ['\bredis\b', '\bvalkey\b', '\bmemcached\b']
+      - name: spark
+        patterns: ['\bspark\b', '\bdatabricks\b', '\bflink\b', '\bairflow\b', '\bdbt\b']
+        # "Spark Capital" is a VC that appears in one company's standard
+        # boilerplate, on every posting they publish.
+        exclude: ['\bspark capital\b']
+      - name: snowflake
+        patterns: ['\bsnowflake\b', '\bredshift\b', '\bclickhouse\b', '\bduckdb\b']
+      - name: nosql
+        patterns: ['\bmongo ?db\b', '\bcassandra\b', '\belasticsearch\b', '\bopensearch\b']
+
+  # -------------------------------------------------------------------
+  - name: domain
+    tags:
+      - name: ml
+        patterns: ['\bmachine learning\b', '\bpytorch\b', '\btensorflow\b', '\bmlops\b', '\bllms?\b', '\bgenerative ai\b']
+      - name: security
+        patterns: ['\bsoc ?2\b', '\bfedramp\b', '\bzero trust\b', '\bthreat model', '\bpen ?test']
+      - name: frontend
+        patterns: ['\breact\b', '\bnext\.?js\b', '\bvue\b', '\bsvelte\b', '\btailwind\b']
