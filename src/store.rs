@@ -26,6 +26,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 
 use crate::model::{CompanyStage, Evaluation, Job, JobRow, Stage, StageSource};
+use crate::tech::TechDetector;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS seen_jobs (
@@ -187,6 +188,10 @@ pub type DismissalSets = (
 
 pub struct Store {
     conn: Connection,
+    /// Compiled `tech.yaml`. Held here so every read tags its rows —
+    /// callers never have to remember to do it, which is what stops half
+    /// the app from seeing tags and the other half not.
+    tech: TechDetector,
 }
 
 impl Store {
@@ -205,7 +210,24 @@ impl Store {
         let _: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
         conn.execute_batch(SCHEMA)?;
         migrate(&conn)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            tech: TechDetector::empty(),
+        })
+    }
+
+    /// Attach a compiled tech detector, so reads tag their rows.
+    ///
+    /// Separate from `open` because the detector comes from a config file
+    /// the store has no business locating, and because tests want a store
+    /// without one.
+    pub fn with_tech(mut self, tech: TechDetector) -> Self {
+        self.tech = tech;
+        self
+    }
+
+    pub fn tech(&self) -> &TechDetector {
+        &self.tech
     }
 
     // ------------------------------------------------------------- dedup
@@ -764,6 +786,15 @@ impl Store {
         let mut rows: Vec<JobRow> = rows.collect::<Result<Vec<_>, _>>()?;
         self.attach_stages(&mut rows)?;
         self.attach_dismissals(&mut rows)?;
+        if !self.tech.is_empty() {
+            for row in rows.iter_mut() {
+                // Tag from the stripped text, not the raw HTML: a pattern
+                // like `\bgo\b` would otherwise match inside a tag name
+                // or a tracking URL.
+                let text = crate::filters::strip_html(&row.description);
+                row.tech = self.tech.detect(&text);
+            }
+        }
         Ok(rows)
     }
 

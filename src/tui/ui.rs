@@ -88,7 +88,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     let body = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+        // The list carries eight columns now; the detail pane still reads
+        // fine at 36% and the extra width is what keeps the title legible.
+        .constraints([Constraint::Percentage(64), Constraint::Percentage(36)])
         .split(chunks[1]);
 
     draw_table(f, body[0], app);
@@ -108,6 +110,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::ConfirmDismissJob | Mode::ConfirmDismissCompany
     ) {
         draw_confirm_dismiss(f, f.area(), app);
+    }
+    if app.mode == Mode::TechPicker {
+        draw_tech_picker(f, f.area(), app);
     }
 }
 
@@ -172,10 +177,11 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
 
     spans.push(Span::styled(
         format!(
-            "  ai:{} mine:{} lvl:{} sort:{}{}",
+            "  ai:{} mine:{} lvl:{} tech:{} sort:{}{}",
             app.ai_filter.label(),
             app.my_filter.label(),
             app.level_filter.label(),
+            app.tech_label(),
             app.sort.label(),
             if app.sort_desc { "↓" } else { "↑" }
         ),
@@ -224,6 +230,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
         Cell::from("title"),
         Cell::from("lvl"),
         Cell::from("stg"),
+        Cell::from("stack"),
         Cell::from("rec"),
         Cell::from("mine"),
     ])
@@ -277,6 +284,8 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
                 Cell::from(r.seniority().map(Seniority::short).unwrap_or("–"))
                     .style(level_style(r.seniority())),
                 Cell::from(r.stage.map(Stage::short).unwrap_or("?")).style(stage_style(r.stage)),
+                Cell::from(r.tech_summary_pinned(2, app.tech_filter.as_ref()))
+                    .style(Style::default().fg(Color::Green)),
                 Cell::from(r.ai_status().to_string()).style(recommendation_style(r.ai_status())),
                 Cell::from(r.my_status.clone().unwrap_or_default())
                     .style(my_status_style(r.my_status.as_deref())),
@@ -287,10 +296,11 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
     let widths = [
         Constraint::Length(3),
         Constraint::Length(1),
-        Constraint::Percentage(26),
+        Constraint::Percentage(22),
         Constraint::Fill(1),
         Constraint::Length(3),
         Constraint::Length(4),
+        Constraint::Length(14),
         Constraint::Length(8),
         Constraint::Length(9),
     ];
@@ -501,6 +511,39 @@ fn detail_lines(row: &JobRow) -> Vec<Line<'static>> {
         }
     }
 
+    if !row.tech.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "STACK",
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )));
+        // Grouped by category so "which cloud" and "which language" are
+        // each answerable at a glance rather than from a flat soup.
+        let mut category = String::new();
+        let mut line: Vec<Span> = Vec::new();
+        for tag in &row.tech {
+            if tag.category != category {
+                if !line.is_empty() {
+                    lines.push(Line::from(std::mem::take(&mut line)));
+                }
+                category = tag.category.clone();
+                line.push(Span::styled(
+                    format!("{:<14}", category),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            line.push(Span::styled(
+                format!("{} ", tag.name),
+                Style::default().fg(Color::Green),
+            ));
+        }
+        if !line.is_empty() {
+            lines.push(Line::from(line));
+        }
+    }
+
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "── job description ──",
@@ -582,6 +625,9 @@ fn draw_keys(f: &mut Frame, area: Rect, app: &App) {
         Mode::ConfirmDismissJob | Mode::ConfirmDismissCompany => {
             "y hide it · any other key cancel".to_string()
         }
+        Mode::TechPicker => {
+            "type to filter · ↑/↓ move · enter select · 0 clear · esc cancel".to_string()
+        }
         // Every binding that isn't discoverable by looking at the screen
         // belongs here, and the whole line has to fit — a hint that gets
         // truncated off the right edge is the same as no hint. So the
@@ -590,15 +636,15 @@ fn draw_keys(f: &mut Frame, area: Rect, app: &App) {
         Mode::Normal => {
             if area.width >= 132 {
                 "j/k move · / search · s startup · L level · f ai · m status · S sort · \
-                 1-5 mark · x hide · X hide co · u undo · a add · c edit · n note · o open · \
-                 r fetch · e eval · ? help · q quit"
+                 t tech · 1-5 mark · x hide · X hide co · u undo · a add · c edit · n note · \
+                 o open · r fetch · e eval · ? help · q quit"
                     .to_string()
             } else if area.width >= 92 {
-                "j/k move · / search · s startup · L level · m status · S sort · 1-5 mark · \
-                 x hide · u undo · a add · ? help · q quit"
+                "j/k move · / search · s startup · L level · t tech · m status · S sort · \
+                 1-5 mark · x hide · u undo · a add · ? help · q quit"
                     .to_string()
             } else {
-                "s startup · L level · m status · S sort · x hide · a add · ? help".to_string()
+                "s startup · L level · t tech · m status · x hide · a add · ? help".to_string()
             }
         }
     };
@@ -622,6 +668,9 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from("           L   level: the filters.yaml policy, then each rung"),
         Line::from("               (intern/junior/mid/senior/staff/manager),"),
         Line::from("               then unlabelled, then any"),
+        Line::from("           t   pick a technology (aws, gcp, rust, ...) — the list"),
+        Line::from("               shows only tags present in your data, with counts"),
+        Line::from("           T   clear the technology filter"),
         Line::from("           f   AI verdict: all/apply/consider/skip/unscored"),
         Line::from("           m   your status: all/tracked/dismissed/untouched/"),
         Line::from("               applied/interview/rejected/skipped/silence"),
@@ -1023,5 +1072,94 @@ fn draw_confirm_dismiss(f: &mut Frame, area: Rect, app: &App) {
                 }),
         ),
         popup,
+    );
+}
+
+/// The technology picker: the tags actually present in your data, with
+/// counts, highest first.
+///
+/// Counts are the feature, not decoration — "aws 412 / gcp 88" answers the
+/// question before you select anything.
+fn draw_tech_picker(f: &mut Frame, area: Rect, app: &App) {
+    let visible = app.tech_visible();
+    let popup = centered_rect(52, 72, area);
+    f.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Green))
+        .title(if app.tech_query.is_empty() {
+            " technology ".to_string()
+        } else {
+            format!(" technology · {} ", app.tech_query)
+        });
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    if visible.is_empty() {
+        f.render_widget(
+            Paragraph::new(if app.tech_choices.is_empty() {
+                "No technologies detected.\n\nEither nothing is stored yet, or tech.yaml is \
+                 missing or failed to load."
+            } else {
+                "Nothing matches what you've typed."
+            })
+            .style(Style::default().fg(Color::DarkGray))
+            .wrap(Wrap { trim: true }),
+            inner,
+        );
+        return;
+    }
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .split(inner);
+
+    let widest = visible
+        .iter()
+        .map(|(t, _)| t.qualified().len())
+        .max()
+        .unwrap_or(20);
+
+    let items: Vec<Line> = visible
+        .iter()
+        .enumerate()
+        .map(|(i, (tag, n))| {
+            let selected = i == app.tech_cursor;
+            let active = app.tech_filter.as_ref() == Some(tag);
+            Line::from(vec![
+                Span::styled(
+                    if selected { " > " } else { "   " },
+                    Style::default().fg(Color::Green),
+                ),
+                Span::styled(
+                    format!("{:<width$}", tag.qualified(), width = widest + 2),
+                    if selected {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    } else if active {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        Style::default()
+                    },
+                ),
+                Span::styled(format!("{n:>5}"), Style::default().fg(Color::DarkGray)),
+            ])
+        })
+        .collect();
+
+    // Scroll so the cursor stays on screen in a list of ~45 tags.
+    let height = rows[0].height as usize;
+    let offset = app.tech_cursor.saturating_sub(height.saturating_sub(2));
+    f.render_widget(Paragraph::new(items).scroll((offset as u16, 0)), rows[0]);
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            format!(
+                "  {} tags · enter select · 0 clear · esc cancel",
+                visible.len()
+            ),
+            Style::default().fg(Color::DarkGray),
+        )),
+        rows[1],
     );
 }

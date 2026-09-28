@@ -265,6 +265,11 @@ pub struct JobRow {
     /// un-blocking a whole employer are very different undos.
     pub dismissed_scope: Option<&'static str>,
     pub dismissed_reason: Option<String>,
+
+    /// Technologies detected in the description by `tech.yaml`'s patterns.
+    /// Derived on read, never stored — improving a pattern takes effect on
+    /// the next run with no migration.
+    pub tech: Vec<crate::tech::Tag>,
 }
 
 impl JobRow {
@@ -282,6 +287,60 @@ impl JobRow {
     /// Whether you entered this by hand rather than a fetcher finding it.
     pub fn is_manual(&self) -> bool {
         self.source == MANUAL_SOURCE
+    }
+
+    /// Whether the description mentions this technology.
+    pub fn has_tech(&self, tag: &crate::tech::Tag) -> bool {
+        self.tech.iter().any(|t| t == tag)
+    }
+
+    /// The most useful tags to show in a narrow column: the stack
+    /// decisions that actually differentiate one posting from another.
+    /// Cloud and language first, because "AWS or GCP" and "Rust or Java"
+    /// are the questions a list view is scanned for.
+    pub fn tech_summary(&self, max: usize) -> String {
+        self.tech_summary_pinned(max, None)
+    }
+
+    /// As `tech_summary`, but with `pin` forced to the front.
+    ///
+    /// Used when a tech filter is active: without it, filtering by Rust
+    /// can show a row whose summary is "aws gcp azure" and leave you
+    /// wondering why it matched.
+    pub fn tech_summary_pinned(&self, max: usize, pin: Option<&crate::tech::Tag>) -> String {
+        // Category order, most differentiating first: "AWS or GCP" and
+        // "Rust or Java" are the questions a narrow column is scanned for.
+        const PRIORITY: [&str; 4] = ["cloud", "language", "platform", "iac"];
+
+        let mut ordered: Vec<&crate::tech::Tag> = Vec::new();
+        if let Some(pin) = pin {
+            if let Some(found) = self.tech.iter().find(|t| *t == pin) {
+                ordered.push(found);
+            }
+        }
+        for want in PRIORITY {
+            for tag in self.tech.iter().filter(|t| t.category == want) {
+                if !ordered.contains(&tag) {
+                    ordered.push(tag);
+                }
+            }
+        }
+        for tag in self
+            .tech
+            .iter()
+            .filter(|t| !PRIORITY.contains(&t.category.as_str()))
+        {
+            if !ordered.contains(&tag) {
+                ordered.push(tag);
+            }
+        }
+
+        ordered
+            .iter()
+            .take(max)
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// The role's level, read from its title.
@@ -483,6 +542,37 @@ mod seniority_tests {
     #[track_caller]
     fn assert_level(title: &str, expected: Option<Seniority>) {
         assert_eq!(infer_seniority(title), expected, "for title {title:?}");
+    }
+
+    #[test]
+    fn a_pinned_tag_leads_the_summary_exactly_once() {
+        let tag = |cat: &str, name: &str| crate::tech::Tag {
+            category: cat.into(),
+            name: name.into(),
+        };
+        let row = JobRow {
+            tech: vec![
+                tag("cloud", "aws"),
+                tag("language", "rust"),
+                tag("language", "go"),
+                tag("platform", "kubernetes"),
+            ],
+            ..Default::default()
+        };
+        // Unpinned: cloud leads, because "which cloud" is the question a
+        // narrow column is scanned for.
+        assert_eq!(row.tech_summary(3), "aws rust go");
+        // Pinned: the filtered tag leads and must not also repeat later —
+        // "rust rust" is what the first attempt produced.
+        assert_eq!(
+            row.tech_summary_pinned(3, Some(&tag("language", "rust"))),
+            "rust aws go"
+        );
+        // Pinning something the row doesn't have changes nothing.
+        assert_eq!(
+            row.tech_summary_pinned(2, Some(&tag("data", "kafka"))),
+            "aws rust"
+        );
     }
 
     #[test]

@@ -261,6 +261,54 @@ jobsearch add --company "Northwind Systems" \
               --description-file jd.txt      # or `-` for stdin
 ```
 
+## Tech stack
+
+Every posting is tagged with the technologies its description mentions —
+deterministically, from `tech.yaml`'s regex patterns. No model, no cost,
+no network. `t` opens a picker of the tags actually present in your data,
+with counts:
+
+```
+┌ technology ──────────────────────────────┐
+│ > language:go              316           │
+│   language:python          315           │
+│   cloud:aws                281           │
+│   platform:kubernetes      270           │
+│   cloud:gcp                183           │
+│   language:rust             79           │
+└──────────────────────────────────────────┘
+```
+
+The counts are the feature — "aws 281 / gcp 183" answers the question
+before you select anything. `jobsearch tech` prints the whole breakdown
+as a histogram; `jobsearch tech --tag rust` lists the matching postings.
+
+Tags are **derived, never stored**: recomputed from the stored description
+on every read, so improving a pattern takes effect on the next run with no
+migration and no re-fetch. `T` clears the filter.
+
+### Writing patterns
+
+`tech.yaml` groups tags by category. Three mechanisms exist because job
+descriptions are full of words that look like technologies and aren't —
+each of the following was a real false positive found in live data:
+
+| | |
+|---|---|
+| `case_sensitive: true` | `\bgo\b` matches "go to market"; `\bGo\b` matches the language. The same trick makes `R` usable. |
+| `exclude:` | Vetoes the tag for the whole posting. "Spark Capital" is a VC in one company's boilerplate and was counted as Apache Spark on every posting they publish. |
+| Just being specific | A bare `\bworkers\b` matched *"unincorporated Los Angeles County workers"* far more often than Cloudflare Workers. `\bts\b` matched *"TS/SCI"* security clearances. |
+
+Two regex traps worth knowing, both of which have bitten this repo:
+
+- **Never put a trailing `\b` after punctuation.** `\bc\+\+\b` can never
+  match, because `+` isn't a word character. Same for `C#`. (This is the
+  same bug that made two of `filters.yaml`'s dealbreakers silently inert.)
+- **Every pattern compiles with `(?-u)`.** Unicode-aware `\b` and case
+  folding cost 1.21s across the corpus; the ASCII equivalents cost 43ms
+  for byte-identical results. That 28× is what makes tagging-on-every-read
+  affordable instead of needing a cache.
+
 ## Hiding noise
 
 Not every posting is worth seeing twice — a role you've already been
@@ -335,6 +383,7 @@ see where things stand without changing filters to count them.
 | `jobsearch refilter` | Re-apply the current `filters.yaml` to everything already stored, without re-fetching. Run it after editing filters. |
 | `jobsearch add` | Record an application by hand, for scripting. `--description-file -` reads the JD from stdin. The TUI's `a` key is the interactive version. |
 | `jobsearch inspect [URL]` | Print a stored job in full, or with no URL list recent rejections and why each was dropped. |
+| `jobsearch tech` | What your candidates actually use, as a histogram. `--tag rust` lists the postings for one tag. |
 | `jobsearch dismiss` | Hide a posting (`--url`) or an employer (`--company`). Soft: `restore` undoes it, `dismissed` lists what's hidden. |
 | `jobsearch diagnose` | Where jobs die in the filter funnel, the daily intake rate, and which single config change reaches the most near-misses. Reads only what's stored; no network. |
 | `jobsearch check` | Validate every config file and report stage coverage. |
@@ -350,6 +399,7 @@ MOVE     j/k or ↑/↓  move          g/G  top/bottom
          tab          switch pane   J/K  scroll detail
 
 FILTER   s   startup mode on/off
+         t   pick a technology (aws, gcp, rust, ...)   T  clear it
          L   level: the policy, then each rung, then unlabelled, then any
          f   AI verdict: all / apply / consider / skip / unscored
          m   your status: all / tracked / dismissed / untouched /
@@ -507,7 +557,7 @@ has no concept of company stage, so it can't do startup mode. See
 ## Development
 
 ```bash
-cargo test          # 108 unit tests, no network
+cargo test          # 120 unit tests, no network
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
@@ -517,8 +567,8 @@ stage-precedence in the store, the HN posting parser, YC's stage mapping,
 the Anthropic tool-response parser (complete, truncated and refused
 shapes), `companies.yaml` appending, the manual-entry form's modal keys and merge
 semantics, the seniority title reader and its policy, dismissal
-persistence across refilter and scoring, and the TUI's
-filter/sort/selection logic. None of them touch
+persistence across refilter and scoring, the tech detector's
+false-positive guards, and the TUI's filter/sort/selection logic. None of them touch
 the network.
 
 ### Layout
@@ -530,6 +580,7 @@ src/
   model.rs        Job, Stage, Evaluation, JobRow
   filters.rs      filters.yaml rules + the startup policy
   store.rs        SQLite
+  tech.rs         deterministic tech-stack detection (tech.yaml)
   pipeline.rs     fetch -> filter -> dedup -> store, and the scoring pass
   evaluate.rs     Anthropic Messages API (raw HTTP; there's no official Rust SDK)
   discover.rs     appending to companies.yaml without eating its comments
