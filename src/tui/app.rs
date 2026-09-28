@@ -24,6 +24,10 @@ pub enum Mode {
     Form,
     /// Confirming deletion of the selected manual entry.
     ConfirmDelete,
+    /// Confirming dismissal of the selected posting.
+    ConfirmDismissJob,
+    /// Confirming dismissal of every posting from the selected employer.
+    ConfirmDismissCompany,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +127,9 @@ pub enum MyFilter {
     All,
     /// Anything you've acted on at all — the application tracker view.
     Tracked,
+    /// The rows you've hidden. The only view that shows them, and where
+    /// `u` puts one back.
+    Dismissed,
     Untouched,
     Applied,
     Interview,
@@ -136,6 +143,7 @@ impl MyFilter {
         match self {
             MyFilter::All => "all",
             MyFilter::Tracked => "tracked",
+            MyFilter::Dismissed => "dismissed",
             MyFilter::Untouched => "untouched",
             MyFilter::Applied => "applied",
             MyFilter::Interview => "interview",
@@ -148,7 +156,12 @@ impl MyFilter {
     pub fn next(self) -> Self {
         match self {
             MyFilter::All => MyFilter::Tracked,
-            MyFilter::Tracked => MyFilter::Untouched,
+            // Dismissed sits next to Tracked rather than at the end of the
+            // chain: both are "rows I've made a decision about", and
+            // burying the only way to find a hidden row nine keypresses
+            // deep would make it effectively undiscoverable.
+            MyFilter::Tracked => MyFilter::Dismissed,
+            MyFilter::Dismissed => MyFilter::Untouched,
             MyFilter::Untouched => MyFilter::Applied,
             MyFilter::Applied => MyFilter::Interview,
             MyFilter::Interview => MyFilter::Rejected,
@@ -159,6 +172,15 @@ impl MyFilter {
     }
 
     fn matches(self, row: &JobRow) -> bool {
+        // Dismissed rows are invisible to every other filter value. That's
+        // the whole point — they only appear when you ask for them, and
+        // `Dismissed` is the only value that asks.
+        if self == MyFilter::Dismissed {
+            return row.dismissed;
+        }
+        if row.dismissed {
+            return false;
+        }
         match self {
             MyFilter::All => true,
             MyFilter::Tracked => row.my_status.is_some(),
@@ -679,6 +701,83 @@ impl App {
             .collect()
     }
 
+    /// `x` — ask to hide this posting.
+    pub fn request_dismiss_job(&mut self) {
+        match self.selected_row() {
+            Some(row) if row.dismissed => self.status = "already dismissed — u restores it".into(),
+            Some(_) => self.mode = Mode::ConfirmDismissJob,
+            None => {}
+        }
+    }
+
+    /// `X` — ask to hide every posting from this employer.
+    pub fn request_dismiss_company(&mut self) {
+        if self.selected_row().is_some() {
+            self.mode = Mode::ConfirmDismissCompany;
+        }
+    }
+
+    pub fn dismiss_selected_job(&mut self, store: &Store) -> Result<()> {
+        let Some(row) = self.selected_row().cloned() else {
+            self.mode = Mode::Normal;
+            return Ok(());
+        };
+        store.dismiss_job(&row, None)?;
+        self.mode = Mode::Normal;
+        self.reload(store)?;
+        self.status = format!(
+            "dismissed {} — {}   (m to the dismissed view, u to undo)",
+            row.company, row.title
+        );
+        Ok(())
+    }
+
+    pub fn dismiss_selected_company(&mut self, store: &Store) -> Result<()> {
+        let Some(row) = self.selected_row().cloned() else {
+            self.mode = Mode::Normal;
+            return Ok(());
+        };
+        let n = store.dismiss_company(&row.company, None)?;
+        self.mode = Mode::Normal;
+        self.reload(store)?;
+        self.status = format!(
+            "dismissed all of {} — {n} posting(s) hidden   (m to the dismissed view, u to undo)",
+            row.company
+        );
+        Ok(())
+    }
+
+    /// `u` — put the selected row back.
+    ///
+    /// Restores whichever dismissal is actually hiding it: undoing a
+    /// company-wide block from one of its postings is the common case, and
+    /// deleting only the job-level row would leave it stubbornly hidden.
+    pub fn restore_selected(&mut self, store: &Store) -> Result<()> {
+        let Some(row) = self.selected_row().cloned() else {
+            return Ok(());
+        };
+        if !row.dismissed {
+            self.status = "not dismissed".into();
+            return Ok(());
+        }
+        match row.dismissed_scope {
+            Some("company") => {
+                store.restore_company(&row.company)?;
+                self.status = format!("restored everything from {}", row.company);
+            }
+            _ => {
+                store.restore_job(&row.url)?;
+                self.status = format!("restored {} — {}", row.company, row.title);
+            }
+        }
+        self.reload(store)?;
+        Ok(())
+    }
+
+    pub fn dismissed_count(&self) -> usize {
+        self.rows.iter().filter(|r| r.dismissed).count()
+    }
+
     pub fn manual_count(&self) -> usize {
         self.rows.iter().filter(|r| r.is_manual()).count()
     }
@@ -945,6 +1044,64 @@ mod tests {
         a.my_filter = MyFilter::Untouched;
         a.recompute();
         assert_eq!(a.view.len(), 1);
+    }
+
+    #[test]
+    fn dismissed_rows_are_invisible_to_every_filter_but_the_dismissed_one() {
+        let hidden = |company: &str, dismissed: bool| JobRow {
+            url: format!("https://x/{company}"),
+            company: company.into(),
+            my_status: Some("applied".into()),
+            stage: Some(Stage::Seed),
+            dismissed,
+            dismissed_scope: dismissed.then_some("job"),
+            ..Default::default()
+        };
+        let mut a = App::new(
+            vec![hidden("Visible", false), hidden("Hidden", true)],
+            policy(),
+            level_policy(),
+        );
+
+        for filter in [MyFilter::All, MyFilter::Tracked, MyFilter::Applied] {
+            a.my_filter = filter;
+            a.recompute();
+            assert_eq!(a.view.len(), 1, "{:?} must not show dismissed rows", filter);
+            assert_eq!(a.rows[a.view[0]].company, "Visible");
+        }
+
+        a.my_filter = MyFilter::Dismissed;
+        a.recompute();
+        assert_eq!(a.view.len(), 1);
+        assert_eq!(a.rows[a.view[0]].company, "Hidden");
+    }
+
+    #[test]
+    fn the_status_filter_cycle_order_matches_what_the_help_advertises() {
+        let mut order = vec![];
+        let mut f = MyFilter::All;
+        loop {
+            order.push(f.label());
+            f = f.next();
+            if f == MyFilter::All {
+                break;
+            }
+        }
+        assert_eq!(
+            order,
+            vec![
+                "all",
+                "tracked",
+                "dismissed",
+                "untouched",
+                "applied",
+                "interview",
+                "rejected",
+                "skipped",
+                "silence"
+            ],
+            "the help overlay lists this order; they must not drift"
+        );
     }
 
     #[test]

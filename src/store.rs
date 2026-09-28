@@ -89,6 +89,31 @@ CREATE TABLE IF NOT EXISTS company_stage (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Postings you've dismissed. A SOFT delete on purpose: the row stays in
+-- job_details with its description and score intact, and only this table
+-- decides whether it's shown. That makes it reversible, auditable, and —
+-- critically — it survives a re-fetch, because dedup would otherwise
+-- happily re-surface a posting you'd already said no to.
+--
+-- Two tables rather than one with a scope column: "hide this posting" and
+-- "hide this employer" are keyed differently (URL vs normalized name) and
+-- have different lifetimes. A company dismissal has to apply to postings
+-- that don't exist yet, which a URL-keyed row can't express.
+CREATE TABLE IF NOT EXISTS dismissed_jobs (
+    url TEXT PRIMARY KEY,
+    company TEXT,
+    title TEXT,
+    reason TEXT,
+    dismissed_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS dismissed_companies (
+    company_key TEXT PRIMARY KEY,
+    company TEXT,
+    reason TEXT,
+    dismissed_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 -- ATS boards resolved for a company we only knew by name (currently: YC
 -- directory entries probed against each ATS's public API). Cached because
 -- a miss is as valuable as a hit — it stops the next run from re-probing
@@ -152,6 +177,13 @@ impl ManualEntry {
         self
     }
 }
+
+/// Dismissals as looked up at read time: the reason, keyed by job URL in
+/// one map and by normalized company name in the other.
+pub type DismissalSets = (
+    std::collections::HashMap<String, Option<String>>,
+    std::collections::HashMap<String, Option<String>>,
+);
 
 pub struct Store {
     conn: Connection,
@@ -229,6 +261,106 @@ impl Store {
             params![i64::from(passed), url],
         )?;
         Ok(())
+    }
+
+    // ---------------------------------------------------------- dismissal
+
+    /// Hide one posting. Idempotent; re-dismissing updates the reason.
+    pub fn dismiss_job(&self, row: &JobRow, reason: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO dismissed_jobs (url, company, title, reason, dismissed_at) \
+             VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP) \
+             ON CONFLICT(url) DO UPDATE SET reason=excluded.reason, \
+               dismissed_at=CURRENT_TIMESTAMP",
+            params![row.url, row.company, row.title, reason],
+        )?;
+        Ok(())
+    }
+
+    /// Hide every posting from an employer, including ones not fetched
+    /// yet. This is the one that earns its keep against staffing agencies,
+    /// which post the same handful of roles under dozens of URLs.
+    pub fn dismiss_company(&self, company: &str, reason: Option<&str>) -> Result<usize> {
+        let key = normalize(company);
+        if key.is_empty() {
+            return Ok(0);
+        }
+        self.conn.execute(
+            "INSERT INTO dismissed_companies (company_key, company, reason, dismissed_at) \
+             VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP) \
+             ON CONFLICT(company_key) DO UPDATE SET reason=excluded.reason, \
+               dismissed_at=CURRENT_TIMESTAMP",
+            params![key, company, reason],
+        )?;
+        // Report how many currently-visible rows this covers, so the caller
+        // can say "hides 37 postings" rather than leaving the blast radius
+        // to be discovered afterwards.
+        Ok(self
+            .all_candidates()?
+            .iter()
+            .filter(|r| normalize(&r.company) == key)
+            .count())
+    }
+
+    pub fn restore_job(&self, url: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM dismissed_jobs WHERE url = ?1", params![url])?;
+        Ok(())
+    }
+
+    pub fn restore_company(&self, company: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM dismissed_companies WHERE company_key = ?1",
+            params![normalize(company)],
+        )?;
+        Ok(())
+    }
+
+    /// Everything currently dismissed, as `(urls, company_keys)`.
+    ///
+    /// Loaded as sets and applied in Rust for the same reason the stage
+    /// join is: matching a company means normalizing its name, and a
+    /// second normalization written in SQL would drift from this one.
+    pub fn dismissed_sets(&self) -> Result<DismissalSets> {
+        let mut jobs = std::collections::HashMap::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT url, reason FROM dismissed_jobs")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get(1)?)))?;
+            for row in rows {
+                let (url, reason) = row?;
+                jobs.insert(url, reason);
+            }
+        }
+        let mut companies = std::collections::HashMap::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT company_key, reason FROM dismissed_companies")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get(1)?)))?;
+            for row in rows {
+                let (key, reason) = row?;
+                companies.insert(key, reason);
+            }
+        }
+        Ok((jobs, companies))
+    }
+
+    /// Dismissed companies, newest first, for `jobsearch dismissed`.
+    pub fn dismissed_company_list(&self) -> Result<Vec<(String, Option<String>, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT company, reason, dismissed_at FROM dismissed_companies \
+             ORDER BY dismissed_at DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                r.get(1)?,
+                r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            ))
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     // ------------------------------------------------------ manual entries
@@ -456,6 +588,9 @@ impl Store {
             "WHERE jd.passed_filters = 1 AND ae.url IS NULL",
             "ORDER BY jd.fetched_at DESC",
         )?;
+        // Dismissed rows never reach the queue. Paying to score a posting
+        // you've explicitly hidden is the clearest possible waste.
+        let rows: Vec<JobRow> = rows.into_iter().filter(|r| !r.dismissed).collect();
         // Both policies gate the QUEUE, not just the display, because
         // this is the step that costs money: paying to score levels or
         // stages you're filtering out is the expensive way to run them.
@@ -628,7 +763,35 @@ impl Store {
         })?;
         let mut rows: Vec<JobRow> = rows.collect::<Result<Vec<_>, _>>()?;
         self.attach_stages(&mut rows)?;
+        self.attach_dismissals(&mut rows)?;
         Ok(rows)
+    }
+
+    /// Mark which rows are dismissed, and why.
+    ///
+    /// Attached to every read rather than filtered out in SQL: the TUI
+    /// needs to be able to SHOW dismissed rows (that's how you undo one),
+    /// so the flag travels with the row and each caller decides.
+    fn attach_dismissals(&self, rows: &mut [JobRow]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let (jobs, companies) = self.dismissed_sets()?;
+        if jobs.is_empty() && companies.is_empty() {
+            return Ok(());
+        }
+        for row in rows.iter_mut() {
+            if let Some(reason) = jobs.get(&row.url) {
+                row.dismissed = true;
+                row.dismissed_scope = Some("job");
+                row.dismissed_reason = reason.clone();
+            } else if let Some(reason) = companies.get(&normalize(&row.company)) {
+                row.dismissed = true;
+                row.dismissed_scope = Some("company");
+                row.dismissed_reason = reason.clone();
+            }
+        }
+        Ok(())
     }
 
     /// Fill in each row's stage from `company_stage`, keyed by the same
@@ -911,6 +1074,108 @@ mod tests {
         assert_eq!(kept_row.title, "Engineer");
         assert_eq!(kept_row.location, "Remote - US");
         assert_eq!(kept_row.source, "greenhouse");
+    }
+
+    #[test]
+    fn dismissing_a_job_hides_it_without_destroying_anything() {
+        let s = store();
+        let j = job("Acme", "Engineer", "https://a/1");
+        s.mark_seen(&j).unwrap();
+        s.save_details(&j, true).unwrap();
+        s.save_user_status("https://a/1", Some("applied"), Some("note"))
+            .unwrap();
+
+        let row = s.all_candidates().unwrap().into_iter().next().unwrap();
+        s.dismiss_job(&row, Some("closed")).unwrap();
+
+        let rows = s.all_candidates().unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "the row still exists — this is a soft delete"
+        );
+        assert!(rows[0].dismissed);
+        assert_eq!(rows[0].dismissed_scope, Some("job"));
+        assert_eq!(rows[0].dismissed_reason.as_deref(), Some("closed"));
+        // Everything attached to it survives, so restoring is lossless.
+        assert_eq!(rows[0].my_status.as_deref(), Some("applied"));
+        assert_eq!(rows[0].notes.as_deref(), Some("note"));
+    }
+
+    #[test]
+    fn a_dismissed_job_is_never_queued_for_paid_scoring() {
+        let s = store();
+        let j = job("Acme", "Engineer", "https://a/1");
+        s.save_details(&j, true).unwrap();
+        assert_eq!(s.unevaluated(None, None).unwrap().len(), 1);
+
+        let row = s.all_candidates().unwrap().into_iter().next().unwrap();
+        s.dismiss_job(&row, None).unwrap();
+        assert!(
+            s.unevaluated(None, None).unwrap().is_empty(),
+            "paying to score something you hid is the clearest waste there is"
+        );
+    }
+
+    #[test]
+    fn dismissing_a_company_covers_every_posting_including_later_ones() {
+        let s = store();
+        for (i, title) in ["Engineer", "Senior Engineer"].iter().enumerate() {
+            let j = job("Motion Recruitment, LLC", title, &format!("https://a/{i}"));
+            s.save_details(&j, true).unwrap();
+        }
+        let n = s
+            .dismiss_company("Motion Recruitment LLC", Some("agency"))
+            .unwrap();
+        assert_eq!(n, 2, "reports the blast radius");
+
+        // A posting fetched AFTER the dismissal is hidden too — that's the
+        // difference between a company dismissal and two job dismissals.
+        let later = job(
+            "motion recruitment,  llc.",
+            "Platform Engineer",
+            "https://a/9",
+        );
+        s.save_details(&later, true).unwrap();
+        let rows = s.all_candidates().unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(
+            rows.iter().all(|r| r.dismissed),
+            "company match must survive punctuation and case differences"
+        );
+        assert!(rows.iter().all(|r| r.dismissed_scope == Some("company")));
+    }
+
+    #[test]
+    fn restoring_puts_a_row_back() {
+        let s = store();
+        let j = job("Acme", "Engineer", "https://a/1");
+        s.save_details(&j, true).unwrap();
+        let row = s.all_candidates().unwrap().into_iter().next().unwrap();
+
+        s.dismiss_job(&row, None).unwrap();
+        assert!(s.all_candidates().unwrap()[0].dismissed);
+        s.restore_job(&row.url).unwrap();
+        assert!(!s.all_candidates().unwrap()[0].dismissed);
+
+        s.dismiss_company("Acme", None).unwrap();
+        assert!(s.all_candidates().unwrap()[0].dismissed);
+        s.restore_company("Acme").unwrap();
+        assert!(!s.all_candidates().unwrap()[0].dismissed);
+    }
+
+    #[test]
+    fn a_job_level_dismissal_takes_precedence_in_reporting() {
+        // Both kinds can apply at once; the UI needs to know which undo to
+        // offer, and restoring the job row alone would leave a
+        // company-blocked posting stubbornly hidden.
+        let s = store();
+        let j = job("Acme", "Engineer", "https://a/1");
+        s.save_details(&j, true).unwrap();
+        let row = s.all_candidates().unwrap().into_iter().next().unwrap();
+        s.dismiss_job(&row, None).unwrap();
+        s.dismiss_company("Acme", None).unwrap();
+        assert_eq!(s.all_candidates().unwrap()[0].dismissed_scope, Some("job"));
     }
 
     #[test]

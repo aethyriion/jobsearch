@@ -285,6 +285,26 @@ fn handle_key(
             }
             return Ok(());
         }
+        Mode::ConfirmDismissJob => {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => app.dismiss_selected_job(store)?,
+                _ => {
+                    app.mode = Mode::Normal;
+                    app.status = "not dismissed".into();
+                }
+            }
+            return Ok(());
+        }
+        Mode::ConfirmDismissCompany => {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => app.dismiss_selected_company(store)?,
+                _ => {
+                    app.mode = Mode::Normal;
+                    app.status = "not dismissed".into();
+                }
+            }
+            return Ok(());
+        }
         Mode::Normal => {}
     }
 
@@ -365,6 +385,9 @@ fn handle_key(
             }
         }
         KeyCode::Char('D') => app.request_delete(),
+        KeyCode::Char('x') => app.request_dismiss_job(),
+        KeyCode::Char('X') => app.request_dismiss_company(),
+        KeyCode::Char('u') => app.restore_selected(store)?,
 
         KeyCode::F(5) => {
             app.reload(store)?;
