@@ -59,6 +59,13 @@ CREATE TABLE IF NOT EXISTS ai_evaluations (
     genuine_gaps TEXT,
     transferable_strengths TEXT,
     risk_factors TEXT,
+    -- Split out from match_score so the two failure modes stay legible:
+    -- qualification_match answers "do I clear the stated bar", callback_odds
+    -- answers "will anyone read it". A single number can't say which of
+    -- those a low score means, and they call for opposite responses.
+    qualification_match INTEGER,
+    callback_odds INTEGER,
+    callback_notes TEXT,
     model TEXT,
     evaluated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -736,8 +743,26 @@ impl Store {
         startup_only: Option<&crate::filters::StartupPolicy>,
         seniority: Option<&crate::filters::SeniorityPolicy>,
     ) -> Result<Vec<JobRow>> {
+        self.evaluation_queue(startup_only, seniority, false)
+    }
+
+    /// The same queue, optionally including rows that already have a
+    /// score. Re-scoring exists because the prompt is not frozen: when the
+    /// scoring rubric changes, every stored verdict was reached under the
+    /// old one, and the stale ones are exactly the rows the change was
+    /// meant to fix.
+    pub fn evaluation_queue(
+        &self,
+        startup_only: Option<&crate::filters::StartupPolicy>,
+        seniority: Option<&crate::filters::SeniorityPolicy>,
+        include_scored: bool,
+    ) -> Result<Vec<JobRow>> {
         let rows = self.query_rows(
-            "WHERE jd.passed_filters = 1 AND ae.url IS NULL",
+            if include_scored {
+                "WHERE jd.passed_filters = 1"
+            } else {
+                "WHERE jd.passed_filters = 1 AND ae.url IS NULL"
+            },
             "ORDER BY jd.fetched_at DESC",
         )?;
         // Dismissed rows never reach the queue. Paying to score a posting
@@ -760,8 +785,9 @@ impl Store {
         self.conn.execute(
             "INSERT OR REPLACE INTO ai_evaluations \
              (url, match_score, recommendation, genuine_gaps, transferable_strengths, \
-              risk_factors, model, evaluated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)",
+              risk_factors, qualification_match, callback_odds, callback_notes, \
+              model, evaluated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP)",
             params![
                 url,
                 eval.match_score,
@@ -769,6 +795,9 @@ impl Store {
                 eval.genuine_gaps,
                 eval.transferable_strengths,
                 eval.risk_factors,
+                eval.qualification_match,
+                eval.callback_odds,
+                eval.callback_notes,
                 model,
             ],
         )?;
@@ -918,6 +947,7 @@ impl Store {
                     jd.source, jd.fetched_at, jd.passed_filters, \
                     ae.match_score, ae.recommendation, ae.genuine_gaps, \
                     ae.transferable_strengths, ae.risk_factors, \
+                    ae.qualification_match, ae.callback_odds, ae.callback_notes, \
                     us.my_status, us.notes \
              FROM job_details jd \
              LEFT JOIN ai_evaluations ae ON jd.url = ae.url \
@@ -941,8 +971,11 @@ impl Store {
                 genuine_gaps: r.get(11)?,
                 transferable_strengths: r.get(12)?,
                 risk_factors: r.get(13)?,
-                my_status: r.get(14)?,
-                notes: r.get(15)?,
+                qualification_match: r.get(14)?,
+                callback_odds: r.get(15)?,
+                callback_notes: r.get(16)?,
+                my_status: r.get(17)?,
+                notes: r.get(18)?,
                 ..Default::default()
             })
         })?;
@@ -1123,6 +1156,31 @@ fn migrate(conn: &Connection) -> Result<()> {
     }
     if !existing.iter().any(|c| c == "source") {
         conn.execute("ALTER TABLE job_details ADD COLUMN source TEXT", [])?;
+    }
+
+    // Added with the two-axis scoring rewrite. Existing evaluations keep
+    // their match_score and simply carry NULL here — they were produced by
+    // a prompt that never asked the question, and backfilling a guess
+    // would be worse than an honest blank.
+    let mut evals = Vec::new();
+    {
+        let mut stmt = conn.prepare("PRAGMA table_info(ai_evaluations)")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+        for row in rows {
+            evals.push(row?);
+        }
+    }
+    for (column, ty) in [
+        ("qualification_match", "INTEGER"),
+        ("callback_odds", "INTEGER"),
+        ("callback_notes", "TEXT"),
+    ] {
+        if !evals.iter().any(|c| c == column) {
+            conn.execute(
+                &format!("ALTER TABLE ai_evaluations ADD COLUMN {column} {ty}"),
+                [],
+            )?;
+        }
     }
     Ok(())
 }

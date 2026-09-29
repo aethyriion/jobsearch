@@ -43,22 +43,75 @@ pub fn model_from_env() -> String {
     std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string())
 }
 
-const SYSTEM_PROMPT: &str = "You are evaluating job postings for FUNCTIONAL FIT against a \
-candidate's real experience — not title matching, not keyword matching. The candidate's profile \
-is organized by competency (what they've actually done), not by job title, specifically so you \
-judge whether their demonstrated capabilities transfer to this role's actual responsibilities.
+const SYSTEM_PROMPT: &str = "You are deciding whether a candidate should spend an application on \
+a job posting. There are two separate questions, and conflating them produces useless advice:
 
-Be honest and specific, not diplomatic. A generic \"great candidate!\" evaluation is useless — the \
-candidate needs real signal on whether to spend an application on this. If the role is a stretch, \
-say so and say why. If there's a real gap, name it precisely rather than softening it. Cite \
-specific evidence from their profile when claiming a strength transfers; don't just assert \
-seniority-level fit in the abstract.
+1. QUALIFICATION — does the candidate clear the bar THIS POSTING SETS? Not whether they are the \
+ideal candidate, not whether the domain is familiar, not whether it is the best job available. \
+Read the posting's stated requirements and check them against the profile, one by one.
 
-This candidate is specifically targeting startups, so the company_stage assessment matters as much \
-as the score. Judge stage from evidence in the posting — funding mentioned, team size, how the \
-company describes itself, whether the role is titled \"founding\" anything, equity in the \
-compensation — and set stage_confidence honestly low when the posting gives you little to go on. \
-Do not guess a stage from the company's name alone.";
+2. CALLBACK ODDS — if they apply, does a human or an automated screen plausibly surface them? A \
+role they would excel at is worth nothing if the application is never read.
+
+Score these independently. A perfect qualification match at a company drowning in applicants and a \
+marginal match at a twelve-person startup are different decisions, and collapsing them into one \
+number hides which is which.
+
+RULES FOR QUALIFICATION
+
+A gap is something the posting REQUIRES that the candidate lacks. It is not an unfamiliar domain, \
+a product area they have not worked in, or a technology that appears in the posting's \
+'nice to have' list. Most engineering roles do not require prior domain experience; do not invent \
+a requirement the posting does not state. If the posting says 'payments experience preferred', \
+that is a preference, not a gap.
+
+Being MORE experienced than the posting asks for is never a gap and must never reduce \
+qualification_match. A ten-year engineer applying to a role asking for four years meets the \
+requirement. Title bands are not comparable across companies — a 'Software Engineer II' at a large \
+company and a 'Senior Engineer' at a startup are often the same work. Over-qualification is a \
+CALLBACK risk, not a qualification one; put it there.
+
+Language and stack requirements are real when the posting makes them primary ('you will write \
+Kotlin every day'), and not when they are one item in a long list. Distinguish the two.
+
+RULES FOR CALLBACK ODDS
+
+Judge from what the posting and its metadata actually tell you. Things that LOWER the odds: a \
+large or well-known employer with a fully-remote req (those receive thousands of applications); a \
+posting more than ~45 days old, which is often already filled or dead; hard knockout requirements \
+the candidate misses that an ATS screens on mechanically (a required degree, a required \
+certification, a security clearance, a specific years-of-experience floor stated as a minimum); a \
+staffing-agency listing, which often has no real requisition behind it; being visibly \
+over-leveled for the band, which recruiters screen out on the assumption the candidate will leave \
+or decline the comp. Things that RAISE the odds: a small company where a founder or hiring manager \
+reads every application; a niche stack that shrinks the applicant pool (Rust, Nix, \
+Kubernetes-plus-Rust); a narrow geography; an unusual combination of skills the candidate \
+genuinely has; a posting that describes a specific problem rather than a generic req.
+
+Be calibrated, not polite. 50 is average. Use 15-30 for a mass-market remote req at a \
+household-name employer, 40-60 for a typical mid-size company posting, and 70+ only when there is \
+a specific reason to think the application gets read by a person. You are estimating, and a \
+posting that gives you little to go on should land near the middle rather than at an extreme.
+
+GROUNDING
+
+Every requirement you cite must be one the posting actually states. When you name a years-of-\
+experience floor, a degree, a certification or a clearance, quote the posting's own words for it \
+rather than paraphrasing — paraphrasing is where invented requirements come from, and a fabricated \
+'requires 1.5+ years' turns a good match into a rejection. If the posting does not state a \
+requirement, say that it does not state one. Do not infer a level from the title's band alone.
+
+GENERAL
+
+Be honest and specific, not diplomatic — but honest means accurate in BOTH directions. Inventing a \
+gap to seem balanced is as useless as glossing over a real one. Cite specific evidence from the \
+profile when claiming a strength transfers; do not assert fit in the abstract.
+
+This candidate is specifically targeting startups, so the company_stage assessment matters too. \
+Judge stage from evidence in the posting — funding mentioned, team size, how the company describes \
+itself, whether the role is titled \"founding\" anything, equity in the compensation — and set \
+stage_confidence honestly low when the posting gives you little to go on. Do not guess a stage \
+from the company's name alone.";
 
 /// Field order is load-bearing, not documentation. The model tends to emit
 /// tool JSON in declaration order, and with `max_tokens` capped, a run of
@@ -76,11 +129,23 @@ fn evaluation_schema() -> Value {
             "properties": {
                 "match_score": {
                     "type": "integer", "minimum": 0, "maximum": 100,
-                    "description": "Overall functional fit score, 0-100."
+                    "description": "Overall 'is this worth an application' score, 0-100. Weight qualification_match roughly 70% and callback_odds roughly 30%: a role they clearly qualify for is still worth applying to at poor odds, but a long-shot qualification at poor odds is not."
                 },
                 "recommendation": {
                     "type": "string", "enum": ["apply", "consider", "skip"],
-                    "description": "apply = strong functional fit, worth the effort. consider = plausible but real gaps/risk. skip = not a genuine fit despite passing keyword filters."
+                    "description": "apply = they meet the stated requirements and the application has a plausible path to being read. consider = they meet most requirements but something real is in the way — a missing hard requirement, or odds so poor the effort is better spent elsewhere. skip = they do not meet the posting's actual requirements, or the role is a different discipline. Do NOT use skip merely because the role is below their level, in an unfamiliar domain, or not the single best available option."
+                },
+                "qualification_match": {
+                    "type": "integer", "minimum": 0, "maximum": 100,
+                    "description": "Purely: do they clear the bar this posting sets? 0-100, judged ONLY against the posting's stated requirements. Being over-qualified never lowers this. An unfamiliar product domain never lowers this unless the posting requires domain experience. 70+ means they meet what is asked; below 40 means a stated requirement is genuinely missing."
+                },
+                "callback_odds": {
+                    "type": "integer", "minimum": 0, "maximum": 100,
+                    "description": "Estimated chance a human or an automated screen actually surfaces this application, 0-100. 50 is average. Judge from employer size and visibility, how long the posting has been up, agency vs direct, ATS knockout requirements they miss, over-leveling, and how narrow the applicant pool is. Be calibrated — see the callback-odds rules in the system prompt."
+                },
+                "callback_notes": {
+                    "type": "string",
+                    "description": "One or two sentences naming the SPECIFIC reasons for the callback_odds number — what would screen them out, or what makes this posting unusually reachable. Concrete factors only ('posted 60 days ago at a 10,000-person employer, fully remote'), never generic advice about tailoring a resume."
                 },
                 "company_stage": {
                     "type": "string",
@@ -97,7 +162,7 @@ fn evaluation_schema() -> Value {
                 },
                 "genuine_gaps": {
                     "type": "string",
-                    "description": "Real, specific gaps between the candidate's experience and this role's requirements. Be honest — don't invent gaps to seem balanced, and don't paper over real ones. Keep to 2-3 sentences."
+                    "description": "Requirements this posting STATES that the candidate does not meet. Not unfamiliar domains, not preferences, not 'nice to haves', and never that they are over-qualified. If they meet everything the posting asks for, say so plainly rather than manufacturing a gap. Keep to 2-3 sentences."
                 },
                 "transferable_strengths": {
                     "type": "string",
@@ -105,10 +170,11 @@ fn evaluation_schema() -> Value {
                 },
                 "risk_factors": {
                     "type": "string",
-                    "description": "Non-skill risks: seniority mismatch, domain mismatch, likely comp mismatch, stack dealbreakers the deterministic filter might have missed, company-stage risk given the candidate's stated preferences. Keep to 2-3 sentences."
+                    "description": "Non-skill risks that would affect the JOB, not the application: likely comp mismatch, company-stage risk given the candidate's stated preferences, stack dealbreakers the deterministic filter might have missed, a role that is a different discipline than its title suggests. Screening risks belong in callback_notes, not here. Keep to 2-3 sentences."
                 }
             },
-            "required": ["match_score", "recommendation", "company_stage", "stage_confidence",
+            "required": ["match_score", "recommendation", "qualification_match", "callback_odds",
+                         "callback_notes", "company_stage", "stage_confidence",
                          "genuine_gaps", "transferable_strengths", "risk_factors"]
         }
     })
@@ -164,10 +230,32 @@ impl Evaluator {
             ""
         };
 
+        // Posting age and who is advertising it are both inputs the
+        // callback-odds rules name explicitly, and neither is anywhere in
+        // the JD text — without them the model is guessing at the two
+        // strongest signals it has been asked to weigh.
+        let posted = match job.posted_at.as_deref() {
+            Some(p) if !p.is_empty() => {
+                let date = &p[..p.len().min(10)];
+                match crate::model::days_since(p) {
+                    Some(days) => format!("Posted: {date} ({days} days ago)\n"),
+                    None => format!("Posted: {date}\n"),
+                }
+            }
+            _ => String::new(),
+        };
+        let channel = match job.channel {
+            Some(crate::model::Channel::Agency) => {
+                "Advertised by: a staffing agency, not the employer directly\n"
+            }
+            Some(crate::model::Channel::Direct) => "Advertised by: the employer directly\n",
+            _ => "",
+        };
+
         format!(
             "CANDIDATE PROFILE:\n{profile}\n\n---\n\nJOB POSTING TO EVALUATE:\n\
              Company: {company}\nTitle: {title}\nLocation: {location}\nURL: {url}\n\
-             Source: {source}\n{partial_note}\nDescription:\n{description}\n\n---\n\n\
+             Source: {source}\n{posted}{channel}{partial_note}\nDescription:\n{description}\n\n---\n\n\
              Call submit_evaluation with your structured assessment.",
             profile = self.profile_yaml,
             company = job.company,
@@ -307,6 +395,9 @@ fn parse_response(text: &str) -> Result<Evaluation> {
     Ok(Evaluation {
         match_score: match_score.clamp(0, 100),
         recommendation,
+        qualification_match: get_i64("qualification_match").map(|v| v.clamp(0, 100)),
+        callback_odds: get_i64("callback_odds").map(|v| v.clamp(0, 100)),
+        callback_notes: get_str("callback_notes").unwrap_or_default(),
         genuine_gaps: get_str("genuine_gaps").unwrap_or_default(),
         transferable_strengths: get_str("transferable_strengths").unwrap_or_default(),
         risk_factors: get_str("risk_factors").unwrap_or_default(),
@@ -345,6 +436,44 @@ mod tests {
         assert_eq!(eval.company_stage, Some(Stage::SeriesB));
         assert_eq!(eval.company_headcount, Some(80));
         assert_eq!(eval.stage_confidence, Some(70));
+    }
+
+    #[test]
+    fn parses_the_two_axis_scores() {
+        let body = r#"{
+          "content": [{"type":"tool_use","name":"submit_evaluation","input":{
+            "match_score": 71, "recommendation": "apply",
+            "qualification_match": 85, "callback_odds": 25,
+            "callback_notes": "Posted 60 days ago at a 5,000-person employer.",
+            "company_stage": "growth", "stage_confidence": 60,
+            "genuine_gaps": "g", "transferable_strengths": "s", "risk_factors": "r"
+          }}],
+          "stop_reason": "tool_use"
+        }"#;
+        let eval = parse_response(body).unwrap();
+        assert_eq!(eval.qualification_match, Some(85));
+        assert_eq!(eval.callback_odds, Some(25));
+        assert!(eval.callback_notes.starts_with("Posted 60 days"));
+    }
+
+    /// Evaluations stored before the two-axis rewrite have no such fields.
+    /// They must read back as "not asked", never as zero — a 0 would sort
+    /// as the worst possible odds and bury rows that were simply scored
+    /// under the older prompt.
+    #[test]
+    fn an_evaluation_without_the_new_axes_is_unknown_not_zero() {
+        let body = r#"{
+          "content": [{"type":"tool_use","name":"submit_evaluation","input":{
+            "match_score": 71, "recommendation": "apply",
+            "company_stage": "growth", "stage_confidence": 60,
+            "genuine_gaps": "g", "transferable_strengths": "s", "risk_factors": "r"
+          }}],
+          "stop_reason": "tool_use"
+        }"#;
+        let eval = parse_response(body).unwrap();
+        assert_eq!(eval.qualification_match, None);
+        assert_eq!(eval.callback_odds, None);
+        assert_eq!(eval.callback_notes, "");
     }
 
     #[test]

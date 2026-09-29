@@ -199,6 +199,18 @@ impl fmt::Display for Stage {
 pub struct Evaluation {
     pub match_score: i64,
     pub recommendation: String,
+    /// Do you clear the bar the posting actually sets? Deliberately
+    /// separate from `match_score`: being over-qualified or new to the
+    /// domain must not move this, so it stays readable as "would they
+    /// have to lie on the form".
+    pub qualification_match: Option<i64>,
+    /// Estimated chance the application is seen at all. Kept apart from
+    /// fit because they fail in opposite directions — a role you'd walk
+    /// into at a company with 4,000 applicants is a different decision
+    /// from a stretch role at a twelve-person startup, and one blended
+    /// number can't tell you which you're looking at.
+    pub callback_odds: Option<i64>,
+    pub callback_notes: String,
     pub genuine_gaps: String,
     pub transferable_strengths: String,
     pub risk_factors: String,
@@ -246,6 +258,9 @@ pub struct JobRow {
 
     pub match_score: Option<i64>,
     pub recommendation: Option<String>,
+    pub qualification_match: Option<i64>,
+    pub callback_odds: Option<i64>,
+    pub callback_notes: Option<String>,
     pub genuine_gaps: Option<String>,
     pub transferable_strengths: Option<String>,
     pub risk_factors: Option<String>,

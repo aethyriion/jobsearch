@@ -43,6 +43,18 @@ fn score_style(score: Option<i64>) -> Style {
     }
 }
 
+/// Odds get their own ramp rather than reusing `score_style`: the numbers
+/// mean different things, and 45 is a perfectly ordinary callback estimate
+/// where 45 as a fit score is not.
+fn odds_style(odds: Option<i64>) -> Style {
+    match odds {
+        Some(o) if o >= 60 => Style::default().fg(Color::Green),
+        Some(o) if o >= 35 => Style::default().fg(Color::Yellow),
+        Some(_) => Style::default().fg(Color::Red),
+        None => Style::default().fg(Color::DarkGray),
+    }
+}
+
 fn recommendation_style(rec: &str) -> Style {
     match rec {
         "apply" => Style::default()
@@ -250,6 +262,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
         Cell::from("stg"),
         Cell::from("stack"),
         Cell::from("rec"),
+        Cell::from("seen"),
         Cell::from("mine · age"),
     ])
     .style(
@@ -315,6 +328,15 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
                 Cell::from(r.tech_summary_pinned(2, app.tech_filter.as_ref()))
                     .style(Style::default().fg(Color::Green)),
                 Cell::from(r.ai_status().to_string()).style(recommendation_style(r.ai_status())),
+                // How likely the application is to be read at all — the
+                // number that decides whether a good fit is worth the
+                // twenty minutes.
+                Cell::from(
+                    r.callback_odds
+                        .map(|o| format!("{o:3}"))
+                        .unwrap_or_else(|| "  –".into()),
+                )
+                .style(odds_style(r.callback_odds)),
                 // Status and age share one cell rather than taking two.
                 // They're read together — "applied, and it's been three
                 // weeks" is one thought — and the list is already wide.
@@ -349,6 +371,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
         Constraint::Length(4),
         Constraint::Length(14),
         Constraint::Length(8),
+        Constraint::Length(4),
         Constraint::Length(13),
     ];
 
@@ -537,10 +560,45 @@ fn detail_lines(row: &JobRow, stale_days: Option<i64>) -> Vec<Line<'static>> {
     lines.push(Line::from(""));
 
     match (row.match_score, row.recommendation.as_deref()) {
-        (Some(score), Some(rec)) => lines.push(Line::from(vec![
-            Span::styled(format!("{score}/100  "), score_style(Some(score))),
-            Span::styled(rec.to_uppercase(), recommendation_style(rec)),
-        ])),
+        (Some(score), Some(rec)) => {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{score}/100  "), score_style(Some(score))),
+                Span::styled(rec.to_uppercase(), recommendation_style(rec)),
+            ]));
+            // The two halves behind the headline number. Worth showing
+            // separately because they point at different actions: a low
+            // qualification score means don't bother, a low odds score
+            // means find a referral or a back channel.
+            if row.qualification_match.is_some() || row.callback_odds.is_some() {
+                let mut split = Vec::new();
+                if let Some(q) = row.qualification_match {
+                    split.push(Span::styled(
+                        "qualified ",
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                    split.push(Span::styled(format!("{q}"), score_style(Some(q))));
+                }
+                if let Some(o) = row.callback_odds {
+                    if !split.is_empty() {
+                        split.push(Span::styled("   ", Style::default()));
+                    }
+                    split.push(Span::styled(
+                        "seen by a human ",
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                    split.push(Span::styled(format!("{o}"), odds_style(Some(o))));
+                }
+                lines.push(Line::from(split));
+            }
+            if let Some(notes) = row.callback_notes.as_deref().filter(|n| !n.is_empty()) {
+                for l in notes.lines() {
+                    lines.push(Line::from(Span::styled(
+                        l.to_string(),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+        }
         _ => lines.push(Line::from(Span::styled(
             "not yet scored — press e to run the AI evaluation",
             Style::default().fg(Color::DarkGray),
@@ -831,7 +889,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from("               rejected/skipped/silence"),
         Line::from("           /   search company, title and location"),
         Line::from("           S   sort: score/company/title/stage/posted/"),
-        Line::from("               status/level/age"),
+        Line::from("               status/level/age/odds/qualified"),
         Line::from("               (status sorts interview first, untouched last;"),
         Line::from("                age sorts longest-untouched first)"),
         Line::from("           R   reverse sort"),
