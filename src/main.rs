@@ -42,6 +42,11 @@ struct Cli {
     command: Option<Command>,
 }
 
+// `Add` carries a dozen argument fields and so sets the size of this
+// enum. That's fine here and nowhere near worth boxing: clap constructs
+// exactly one of these, once, at startup — it is never in a hot path, a
+// collection, or a future.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
     /// Open the review TUI (the default when no subcommand is given).
@@ -81,6 +86,11 @@ enum Command {
         /// Score every stage, not just startups.
         #[arg(long)]
         all_stages: bool,
+        /// Score exactly this posting, ignoring the queue policies —
+        /// including one that already has a score, which is how you
+        /// re-score after pasting in a better description.
+        #[arg(long, value_name = "URL")]
+        url: Option<String>,
     },
 
     /// Re-apply the current filters.yaml to everything already stored,
@@ -146,9 +156,12 @@ enum Command {
         stage: Option<String>,
         #[arg(long)]
         headcount: Option<i64>,
-        /// applied | interview | rejected | skipped | silence
+        /// applied | recruiter | interview | rejected | skipped | silence
         #[arg(long)]
         status: Option<String>,
+        /// direct | agency | referral | inbound — who is advertising it.
+        #[arg(long)]
+        channel: Option<String>,
         #[arg(long)]
         notes: Option<String>,
     },
@@ -194,6 +207,18 @@ enum Command {
         /// Include dismissed postings.
         #[arg(long)]
         include_dismissed: bool,
+    },
+
+    /// Set or clear who is advertising a posting: direct, agency,
+    /// referral or inbound. A hand-set value always beats the guess made
+    /// from the posting's own language.
+    Channel {
+        #[arg(long)]
+        url: String,
+        /// direct | agency | referral | inbound. Omit to clear the
+        /// override and fall back to the inferred value.
+        #[arg(long)]
+        set: Option<String>,
     },
 
     /// Show where jobs die in the filter funnel — the answer to "are my
@@ -262,7 +287,8 @@ async fn async_main() -> Result<()> {
             dry_run,
             limit,
             all_stages,
-        } => cmd_evaluate(&paths, dry_run, limit, all_stages).await,
+            url,
+        } => cmd_evaluate(&paths, dry_run, limit, all_stages, url).await,
         Command::Refilter { dry_run } => cmd_refilter(&paths, dry_run),
         Command::DiscoverYc {
             limit,
@@ -282,6 +308,7 @@ async fn async_main() -> Result<()> {
             stage,
             headcount,
             status,
+            channel,
             notes,
         } => cmd_add(
             &paths,
@@ -296,6 +323,7 @@ async fn async_main() -> Result<()> {
                 stage,
                 headcount,
                 status,
+                channel,
                 notes,
             },
         ),
@@ -306,6 +334,7 @@ async fn async_main() -> Result<()> {
         } => cmd_dismiss(&paths, url, company, reason),
         Command::Restore { url, company } => cmd_restore(&paths, url, company),
         Command::Dismissed => cmd_dismissed(&paths),
+        Command::Channel { url, set } => cmd_channel(&paths, url, set),
         Command::Tech {
             tag,
             limit,
@@ -339,7 +368,12 @@ fn open_store(paths: &Paths) -> Result<Store> {
             tech::TechDetector::empty()
         }
     };
-    Ok(Store::open(paths.db())?.with_tech(tech))
+    let (text, company) = load_filters(paths)
+        .map(|f| (f.agency_text.clone(), f.agency_company.clone()))
+        .unwrap_or_else(|_| (regex::RegexSet::empty(), regex::RegexSet::empty()));
+    Ok(Store::open(paths.db())?
+        .with_tech(tech)
+        .with_agency_patterns(text, company))
 }
 
 // ------------------------------------------------------------------ fetch
@@ -520,9 +554,30 @@ async fn cmd_evaluate(
     dry_run: bool,
     limit: Option<usize>,
     all_stages: bool,
+    url: Option<String>,
 ) -> Result<()> {
     let filters = load_filters(paths)?;
     let store = open_store(paths)?;
+
+    // One posting, bypassing every queue policy — including a re-score of
+    // something already scored, which is the point after pasting in a
+    // better description.
+    if let Some(url) = url {
+        let row = store
+            .get_by_url(&url)?
+            .ok_or_else(|| anyhow::anyhow!("no stored job with url {url}"))?;
+        println!("{} — {}", row.company, row.title);
+        if dry_run {
+            println!("(dry run — nothing was sent, nothing was charged)");
+            return Ok(());
+        }
+        let profile = config::load_profile(paths.profile())?;
+        let evaluator = evaluate::Evaluator::new(&profile, evaluate::model_from_env())?;
+        let eval = pipeline::evaluate_one(&store, &filters, &evaluator, &row).await?;
+        println!("  {} {}", eval.match_score, eval.recommendation);
+        pipeline::write_scored_csv(&store, paths.scored_csv())?;
+        return Ok(());
+    }
     let startup_only = !all_stages && filters.startup.enabled_by_default;
 
     let policy = startup_only.then_some(&filters.startup);
@@ -860,6 +915,7 @@ struct AddArgs {
     stage: Option<String>,
     headcount: Option<i64>,
     status: Option<String>,
+    channel: Option<String>,
     notes: Option<String>,
 }
 
@@ -905,6 +961,20 @@ fn cmd_add(paths: &Paths, args: AddArgs) -> Result<()> {
         }
     }
 
+    let channel = match args.channel.as_deref() {
+        Some(raw) => Some(model::Channel::parse(raw).ok_or_else(|| {
+            anyhow::anyhow!(
+                "--channel {raw:?} isn't valid. One of: {}",
+                model::Channel::ALL
+                    .iter()
+                    .map(|c| c.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?),
+        None => None,
+    };
+
     let entry = store::ManualEntry {
         url: args.url,
         company: args.company,
@@ -915,6 +985,7 @@ fn cmd_add(paths: &Paths, args: AddArgs) -> Result<()> {
         stage,
         headcount: args.headcount,
         my_status: args.status,
+        channel,
         notes: args.notes,
     }
     .with_url();
@@ -929,6 +1000,9 @@ fn cmd_add(paths: &Paths, args: AddArgs) -> Result<()> {
     println!("  url   {}", entry.url);
     if let Some(stage) = entry.stage {
         println!("  stage {}", stage.as_str());
+    }
+    if let Some(channel) = entry.channel {
+        println!("  channel {}", channel.as_str());
     }
     println!("\nIt shows inline in the TUI and is queued for `jobsearch evaluate`.");
     Ok(())
@@ -1021,6 +1095,31 @@ fn cmd_dismissed(paths: &Paths) -> Result<()> {
         println!();
     }
     println!("`jobsearch restore --url <URL>` or `--company <NAME>` puts one back.");
+    Ok(())
+}
+
+// --------------------------------------------------------------- channel
+
+fn cmd_channel(paths: &Paths, url: String, set: Option<String>) -> Result<()> {
+    let store = open_store(paths)?;
+    let channel = match set.as_deref() {
+        Some(raw) => Some(model::Channel::parse(raw).ok_or_else(|| {
+            anyhow::anyhow!(
+                "--set {raw:?} isn't valid. One of: {}",
+                model::Channel::ALL
+                    .iter()
+                    .map(|c| c.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?),
+        None => None,
+    };
+    store.set_channel(&url, channel)?;
+    match channel {
+        Some(c) => println!("{url}\n  channel {}", c.as_str()),
+        None => println!("{url}\n  override cleared; falling back to the inferred value"),
+    }
     Ok(())
 }
 
@@ -1381,10 +1480,12 @@ fn cmd_check(paths: &Paths) -> Result<()> {
             println!("database          {}", paths.db().display());
             let manual = all.iter().filter(|r| r.is_manual()).count();
             let in_level = all.iter().filter(|r| filters.seniority.admits(r)).count();
+            let agencies = all.iter().filter(|r| r.is_agency()).count();
             println!(
                 "                  {} candidates, {startup} startup, {scored} scored, \
                  {manual} entered by hand,\n                  {in_level} within the level \
-                 policy, {} companies with a known stage",
+                 policy,\n                  {agencies} look like staffing agencies, \
+                 {} companies with a known stage",
                 all.len(),
                 store.company_stage_count()?
             );

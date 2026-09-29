@@ -115,6 +115,16 @@ CREATE TABLE IF NOT EXISTS dismissed_companies (
     dismissed_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Hiring channel set BY HAND. Only overrides live here: the inferred
+-- value is derived from the posting text on every read (see
+-- `model::infer_channel`), so improving the patterns takes effect without
+-- a migration, while anything you typed survives untouched.
+CREATE TABLE IF NOT EXISTS job_channel (
+    url TEXT PRIMARY KEY,
+    channel TEXT,
+    set_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 -- ATS boards resolved for a company we only knew by name (currently: YC
 -- directory entries probed against each ATS's public API). Cached because
 -- a miss is as valuable as a hit — it stops the next run from re-probing
@@ -147,6 +157,9 @@ pub struct ManualEntry {
     pub headcount: Option<i64>,
     pub my_status: Option<String>,
     pub notes: Option<String>,
+    /// Who is advertising it. `None` leaves whatever is already recorded
+    /// alone, so editing a row without touching this field can't wipe it.
+    pub channel: Option<crate::model::Channel>,
 }
 
 impl ManualEntry {
@@ -192,6 +205,10 @@ pub struct Store {
     /// callers never have to remember to do it, which is what stops half
     /// the app from seeing tags and the other half not.
     tech: TechDetector,
+    /// Compiled agency patterns from filters.yaml, so reads can infer a
+    /// channel without the caller supplying them.
+    agency_text: regex::RegexSet,
+    agency_company: regex::RegexSet,
 }
 
 impl Store {
@@ -213,7 +230,16 @@ impl Store {
         Ok(Self {
             conn,
             tech: TechDetector::empty(),
+            agency_text: regex::RegexSet::empty(),
+            agency_company: regex::RegexSet::empty(),
         })
+    }
+
+    /// Attach the compiled agency patterns, so reads can infer a channel.
+    pub fn with_agency_patterns(mut self, text: regex::RegexSet, company: regex::RegexSet) -> Self {
+        self.agency_text = text;
+        self.agency_company = company;
+        self
     }
 
     /// Attach a compiled tech detector, so reads tag their rows.
@@ -283,6 +309,43 @@ impl Store {
             params![i64::from(passed), url],
         )?;
         Ok(())
+    }
+
+    // ------------------------------------------------------------ channel
+
+    /// Record who is advertising a posting. `None` clears the override and
+    /// lets the inferred value show through again.
+    pub fn set_channel(&self, url: &str, channel: Option<crate::model::Channel>) -> Result<()> {
+        match channel {
+            Some(c) => self.conn.execute(
+                "INSERT INTO job_channel (url, channel, set_at) \
+                 VALUES (?1, ?2, CURRENT_TIMESTAMP) \
+                 ON CONFLICT(url) DO UPDATE SET channel=excluded.channel, \
+                   set_at=CURRENT_TIMESTAMP",
+                params![url, c.as_str()],
+            )?,
+            None => self
+                .conn
+                .execute("DELETE FROM job_channel WHERE url = ?1", params![url])?,
+        };
+        Ok(())
+    }
+
+    fn channel_overrides(
+        &self,
+    ) -> Result<std::collections::HashMap<String, crate::model::Channel>> {
+        let mut stmt = self.conn.prepare("SELECT url, channel FROM job_channel")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+        })?;
+        let mut out = std::collections::HashMap::new();
+        for row in rows {
+            let (url, channel) = row?;
+            if let Some(c) = channel.as_deref().and_then(crate::model::Channel::parse) {
+                out.insert(url, c);
+            }
+        }
+        Ok(out)
     }
 
     // ---------------------------------------------------------- dismissal
@@ -469,6 +532,10 @@ impl Store {
         // Only touch user_status when the form actually carried one —
         // otherwise editing a manual row's title would silently clear a
         // status set earlier with the 1-5 keys.
+        if let Some(channel) = entry.channel {
+            self.set_channel(&entry.url, Some(channel))?;
+        }
+
         if entry.my_status.is_some() || entry.notes.is_some() {
             let previous = self.get_user_status(&entry.url)?;
             let status = entry
@@ -714,11 +781,19 @@ impl Store {
         self.query_rows("WHERE jd.passed_filters = 0", "ORDER BY jd.fetched_at DESC")
     }
 
+    /// One row by URL.
+    ///
+    /// This has to be a real indexed lookup, not a scan. The first version
+    /// selected EVERY stored row, attached stages and dismissals to all of
+    /// them, ran tech detection over 15,000 descriptions, and then called
+    /// `.find()` — 1.3 seconds to fetch one row, on a path that
+    /// `upsert_manual_job` hits on every save. That was the "lag when
+    /// saving a manual entry".
     pub fn get_by_url(&self, url: &str) -> Result<Option<JobRow>> {
         Ok(self
-            .query_rows_with("", "", rusqlite::params![])?
+            .query_rows_with("WHERE jd.url = ?1", "", rusqlite::params![url])?
             .into_iter()
-            .find(|r| r.url == url))
+            .next())
     }
 
     /// Scored candidates, best match first — the rows written to the
@@ -786,6 +861,23 @@ impl Store {
         let mut rows: Vec<JobRow> = rows.collect::<Result<Vec<_>, _>>()?;
         self.attach_stages(&mut rows)?;
         self.attach_dismissals(&mut rows)?;
+        // Channel: the hand-set override wins; otherwise infer from the
+        // text. Same precedence shape as company stage.
+        let overrides = self.channel_overrides()?;
+        for row in rows.iter_mut() {
+            if let Some(c) = overrides.get(&row.url) {
+                row.channel = Some(*c);
+                row.channel_source = Some(crate::model::ChannelSource::Manual);
+            } else if let Some(c) = crate::model::infer_channel(
+                &row.company,
+                &row.description,
+                &self.agency_text,
+                &self.agency_company,
+            ) {
+                row.channel = Some(c);
+                row.channel_source = Some(crate::model::ChannelSource::Inferred);
+            }
+        }
         if !self.tech.is_empty() {
             for row in rows.iter_mut() {
                 // Tag from the stripped text, not the raw HTML: a pattern
@@ -1105,6 +1197,108 @@ mod tests {
         assert_eq!(kept_row.title, "Engineer");
         assert_eq!(kept_row.location, "Remote - US");
         assert_eq!(kept_row.source, "greenhouse");
+    }
+
+    fn agency_text_set() -> regex::RegexSet {
+        regex::RegexSet::new([r"(?i-u)\bon behalf of our client\b"]).unwrap()
+    }
+    fn agency_company_set() -> regex::RegexSet {
+        regex::RegexSet::new([r"(?i-u)\bmotion recruitment\b"]).unwrap()
+    }
+
+    #[test]
+    fn an_agency_posting_is_inferred_from_its_text_or_its_name() {
+        let s = store().with_agency_patterns(agency_text_set(), agency_company_set());
+        let mut by_body = job("Unknown Co", "Engineer", "https://a/1");
+        by_body.description = "On behalf of our client, a Series B fintech.".into();
+        s.save_details(&by_body, true).unwrap();
+
+        let by_name = job("Motion Recruitment, LLC", "Engineer", "https://a/2");
+        s.save_details(&by_name, true).unwrap();
+
+        let plain = job("Tailscale", "Engineer", "https://a/3");
+        s.save_details(&plain, true).unwrap();
+
+        let rows = s.all_candidates().unwrap();
+        let ch = |url: &str| rows.iter().find(|r| r.url == url).and_then(|r| r.channel);
+        assert_eq!(ch("https://a/1"), Some(crate::model::Channel::Agency));
+        assert_eq!(ch("https://a/2"), Some(crate::model::Channel::Agency));
+        // No agency signal means NO claim — not a claim of "direct".
+        assert_eq!(ch("https://a/3"), None);
+    }
+
+    #[test]
+    fn a_hand_set_channel_beats_the_inferred_one() {
+        let s = store().with_agency_patterns(agency_text_set(), agency_company_set());
+        let mut j = job("Motion Recruitment, LLC", "Engineer", "https://a/1");
+        j.description = "On behalf of our client.".into();
+        s.save_details(&j, true).unwrap();
+        assert_eq!(
+            s.all_candidates().unwrap()[0].channel,
+            Some(crate::model::Channel::Agency)
+        );
+
+        s.set_channel("https://a/1", Some(crate::model::Channel::Direct))
+            .unwrap();
+        let row = &s.all_candidates().unwrap()[0];
+        assert_eq!(row.channel, Some(crate::model::Channel::Direct));
+        assert_eq!(
+            row.channel_source,
+            Some(crate::model::ChannelSource::Manual)
+        );
+
+        // Clearing falls back to the guess rather than to nothing.
+        s.set_channel("https://a/1", None).unwrap();
+        let row = &s.all_candidates().unwrap()[0];
+        assert_eq!(row.channel, Some(crate::model::Channel::Agency));
+        assert_eq!(
+            row.channel_source,
+            Some(crate::model::ChannelSource::Inferred)
+        );
+    }
+
+    #[test]
+    fn editing_a_manual_entry_without_a_channel_keeps_the_one_already_set() {
+        let s = store();
+        let mut entry = ManualEntry {
+            company: "Acme".into(),
+            title: "Engineer".into(),
+            channel: Some(crate::model::Channel::Referral),
+            ..Default::default()
+        }
+        .with_url();
+        s.upsert_manual_job(&entry).unwrap();
+        assert_eq!(
+            s.all_candidates().unwrap()[0].channel,
+            Some(crate::model::Channel::Referral)
+        );
+
+        entry.channel = None;
+        entry.location = "Remote - US".into();
+        s.upsert_manual_job(&entry).unwrap();
+        let row = &s.all_candidates().unwrap()[0];
+        assert_eq!(row.location, "Remote - US", "the edit landed");
+        assert_eq!(
+            row.channel,
+            Some(crate::model::Channel::Referral),
+            "an edit that didn't mention the channel must not clear it"
+        );
+    }
+
+    #[test]
+    fn get_by_url_is_an_indexed_lookup_not_a_scan() {
+        // The first version selected every stored row and called .find(),
+        // which cost 1.3s per lookup on the real database and made every
+        // manual-entry save feel broken. Assert the query is actually
+        // narrowed, by checking it doesn't return a different row.
+        let s = store();
+        for i in 0..50 {
+            let j = job("Acme", &format!("Engineer {i}"), &format!("https://a/{i}"));
+            s.save_details(&j, true).unwrap();
+        }
+        let found = s.get_by_url("https://a/7").unwrap().expect("should exist");
+        assert_eq!(found.title, "Engineer 7");
+        assert!(s.get_by_url("https://a/nope").unwrap().is_none());
     }
 
     #[test]

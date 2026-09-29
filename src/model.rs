@@ -266,6 +266,11 @@ pub struct JobRow {
     pub dismissed_scope: Option<&'static str>,
     pub dismissed_reason: Option<String>,
 
+    /// Who is advertising this posting, and how confidently we know.
+    /// `None` means nobody has said and the text gives no clue.
+    pub channel: Option<Channel>,
+    pub channel_source: Option<ChannelSource>,
+
     /// Technologies detected in the description by `tech.yaml`'s patterns.
     /// Derived on read, never stored — improving a pattern takes effect on
     /// the next run with no migration.
@@ -287,6 +292,11 @@ impl JobRow {
     /// Whether you entered this by hand rather than a fetcher finding it.
     pub fn is_manual(&self) -> bool {
         self.source == MANUAL_SOURCE
+    }
+
+    /// Whether this looks like a staffing-agency listing.
+    pub fn is_agency(&self) -> bool {
+        self.channel == Some(Channel::Agency)
     }
 
     /// Whether the description mentions this technology.
@@ -362,7 +372,18 @@ pub const MANUAL_SOURCE: &str = "manual";
 /// from the AI's apply/consider/skip so the two can never be confused in
 /// the UI: the AI recommends before you apply, this records what actually
 /// happened after.
-pub const MY_STATUS_VALUES: [&str; 5] = ["applied", "interview", "rejected", "skipped", "silence"];
+/// In PIPELINE order, which is also the TUI's 1-6 key order. "recruiter"
+/// sits between applied and interview because that's where a recruiter
+/// screen actually falls — and it's a distinct state worth tracking: it
+/// means a human replied, which "applied" alone doesn't.
+pub const MY_STATUS_VALUES: [&str; 6] = [
+    "applied",
+    "recruiter",
+    "interview",
+    "rejected",
+    "skipped",
+    "silence",
+];
 
 /// Where a posting sits on the seniority ladder, earliest to latest.
 ///
@@ -662,4 +683,115 @@ mod seniority_tests {
         assert!(Seniority::Senior < Seniority::Staff);
         assert!(Seniority::Staff < Seniority::Manager);
     }
+}
+
+/// Who is actually advertising a posting.
+///
+/// A different axis from company stage: "Motion Recruitment Partners" is a
+/// staffing agency placing someone at an employer you can't see, and that
+/// changes what applying means — a different process, a different
+/// negotiation, and often the same role listed three times.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Channel {
+    /// The employer posted it themselves.
+    Direct,
+    /// A staffing agency or recruiting firm is the advertiser.
+    Agency,
+    /// Came to you through someone you know.
+    Referral,
+    /// A recruiter contacted you about it.
+    Inbound,
+}
+
+impl Channel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Channel::Direct => "direct",
+            Channel::Agency => "agency",
+            Channel::Referral => "referral",
+            Channel::Inbound => "inbound",
+        }
+    }
+
+    /// One character for the list's marker column.
+    pub fn short(self) -> &'static str {
+        match self {
+            Channel::Direct => "D",
+            Channel::Agency => "A",
+            Channel::Referral => "R",
+            Channel::Inbound => "I",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "direct" | "d" => Some(Channel::Direct),
+            "agency" | "a" | "staffing" | "recruiter" => Some(Channel::Agency),
+            "referral" | "r" | "referred" => Some(Channel::Referral),
+            "inbound" | "i" | "outreach" => Some(Channel::Inbound),
+            _ => None,
+        }
+    }
+
+    pub const ALL: [Channel; 4] = [
+        Channel::Direct,
+        Channel::Agency,
+        Channel::Referral,
+        Channel::Inbound,
+    ];
+}
+
+impl fmt::Display for Channel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Where a channel claim came from. Same precedence idea as `StageSource`:
+/// something you set by hand always beats a guess from the text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelSource {
+    /// You set it — in the form, or with `jobsearch channel`.
+    Manual,
+    /// Inferred from the posting's own language.
+    Inferred,
+}
+
+impl ChannelSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            ChannelSource::Manual => "you",
+            ChannelSource::Inferred => "guess",
+        }
+    }
+}
+
+/// Guess whether a posting came from a staffing agency.
+///
+/// Only ever returns `Agency` or `None`: "this reads like an agency
+/// listing" is a claim the text can support, but "this is a direct hire"
+/// is just the absence of that evidence, and recording it as a positive
+/// would launder a non-observation into a fact. Say nothing instead and
+/// let the row show `–`.
+///
+/// Patterns come from `filters.yaml` so the list can grow without a
+/// recompile — agencies are regional and there is no finite set of them.
+pub fn infer_channel(
+    company: &str,
+    description: &str,
+    text_patterns: &regex::RegexSet,
+    company_patterns: &regex::RegexSet,
+) -> Option<Channel> {
+    // Agency NAMES are matched against the company field alone. Matching
+    // them against the body finds customer lists instead: a Dialpad
+    // posting naming "Randstad, Motorola Solutions, Netflix" as brands it
+    // serves was labelled an agency listing.
+    if !company_patterns.is_empty() && company_patterns.is_match(company) {
+        return Some(Channel::Agency);
+    }
+    if !text_patterns.is_empty() && text_patterns.is_match(description) {
+        return Some(Channel::Agency);
+    }
+    None
 }

@@ -37,6 +37,10 @@ pub struct Filters {
     truncated_min_chars: usize,
     pub startup: StartupPolicy,
     pub seniority: SeniorityPolicy,
+    /// Phrases matched against the posting text.
+    pub agency_text: regex::RegexSet,
+    /// Names matched against the company field only.
+    pub agency_company: regex::RegexSet,
 }
 
 impl Filters {
@@ -58,6 +62,8 @@ impl Filters {
             truncated_min_chars: cfg.truncated_description_min_chars,
             startup: StartupPolicy::from_config(&cfg.startup)?,
             seniority: SeniorityPolicy::from_config(&cfg.seniority)?,
+            agency_text: compile_set(&cfg.agency_text_patterns, "agency_text_patterns")?,
+            agency_company: compile_set(&cfg.agency_company_patterns, "agency_company_patterns")?,
         })
     }
 
@@ -334,6 +340,20 @@ fn compile_word_boundary_alternation(keywords: &[String]) -> Option<Regex> {
     Regex::new(&format!(r"(?i)\b({joined})\b")).ok()
 }
 
+/// Compile many patterns into one `RegexSet`, ASCII-mode for the same
+/// 28x reason documented in `tech.rs`. An empty list is fine and yields a
+/// set that matches nothing.
+fn compile_set(patterns: &[String], config_key: &str) -> Result<regex::RegexSet> {
+    let prefixed: Vec<String> = patterns.iter().map(|p| format!("(?i-u){p}")).collect();
+    for (raw, p) in patterns.iter().zip(&prefixed) {
+        Regex::new(p).map_err(|e| {
+            anyhow!("filters.yaml: '{config_key}' pattern {raw:?} is not valid regex: {e}")
+        })?;
+    }
+    regex::RegexSet::new(&prefixed)
+        .map_err(|e| anyhow!("filters.yaml: compiling '{config_key}': {e}"))
+}
+
 fn compile_patterns(patterns: &[String], config_key: &str) -> Result<Vec<Regex>> {
     if patterns.is_empty() {
         return Err(anyhow!("filters.yaml's '{config_key}' is empty"));
@@ -409,6 +429,8 @@ mod tests {
             truncated_description_min_chars: 400,
             startup: StartupPolicyConfig::default(),
             seniority: SeniorityPolicyConfig::default(),
+            agency_text_patterns: vec![r"\bon behalf of our client\b".into()],
+            agency_company_patterns: vec![r"\bmotion recruitment\b".into()],
         };
         Filters::compile(&cfg).unwrap()
     }

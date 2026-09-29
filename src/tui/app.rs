@@ -28,6 +28,8 @@ pub enum Mode {
     ConfirmDismissJob,
     /// Confirming dismissal of every posting from the selected employer.
     ConfirmDismissCompany,
+    /// Confirming a batch scoring run, which costs real money.
+    ConfirmEvaluateAll,
     /// Picking a technology to filter by.
     TechPicker,
 }
@@ -134,6 +136,7 @@ pub enum MyFilter {
     Dismissed,
     Untouched,
     Applied,
+    Recruiter,
     Interview,
     Rejected,
     Skipped,
@@ -148,6 +151,7 @@ impl MyFilter {
             MyFilter::Dismissed => "dismissed",
             MyFilter::Untouched => "untouched",
             MyFilter::Applied => "applied",
+            MyFilter::Recruiter => "recruiter",
             MyFilter::Interview => "interview",
             MyFilter::Rejected => "rejected",
             MyFilter::Skipped => "skipped",
@@ -165,7 +169,8 @@ impl MyFilter {
             MyFilter::Tracked => MyFilter::Dismissed,
             MyFilter::Dismissed => MyFilter::Untouched,
             MyFilter::Untouched => MyFilter::Applied,
-            MyFilter::Applied => MyFilter::Interview,
+            MyFilter::Applied => MyFilter::Recruiter,
+            MyFilter::Recruiter => MyFilter::Interview,
             MyFilter::Interview => MyFilter::Rejected,
             MyFilter::Rejected => MyFilter::Skipped,
             MyFilter::Skipped => MyFilter::Silence,
@@ -861,6 +866,19 @@ impl App {
         Ok(())
     }
 
+    /// How many rows the next batch scoring run would pay for.
+    pub fn unscored_in_scope(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| {
+                r.recommendation.is_none()
+                    && !r.dismissed
+                    && (!self.startup_only || self.startup_policy.admits(r))
+                    && self.seniority_policy.admits(r)
+            })
+            .count()
+    }
+
     pub fn dismissed_count(&self) -> usize {
         self.rows.iter().filter(|r| r.dismissed).count()
     }
@@ -920,12 +938,15 @@ impl App {
 /// beats having 800 unmarked rows head a status sort.
 fn status_rank(status: Option<&str>) -> u8 {
     match status {
+        // Furthest along first. A recruiter screen outranks a bare
+        // application because a human has actually replied.
         Some("interview") => 0,
-        Some("applied") => 1,
-        Some("silence") => 2,
-        Some("rejected") => 3,
-        Some("skipped") => 4,
-        _ => 5,
+        Some("recruiter") => 1,
+        Some("applied") => 2,
+        Some("silence") => 3,
+        Some("rejected") => 4,
+        Some("skipped") => 5,
+        _ => 6,
     }
 }
 
@@ -1077,6 +1098,35 @@ mod tests {
     }
 
     #[test]
+    fn recruiter_sorts_between_applied_and_interview() {
+        let with_status = |company: &str, status: &str| JobRow {
+            url: format!("https://x/{company}"),
+            company: company.into(),
+            my_status: Some(status.into()),
+            stage: Some(Stage::Seed),
+            ..Default::default()
+        };
+        let mut a = App::new(
+            vec![
+                with_status("Applied", "applied"),
+                with_status("Interview", "interview"),
+                with_status("Recruiter", "recruiter"),
+            ],
+            policy(),
+            level_policy(),
+        );
+        a.sort = SortKey::Status;
+        a.sort_desc = false;
+        a.recompute();
+        let order: Vec<_> = a.view.iter().map(|&i| a.rows[i].company.clone()).collect();
+        assert_eq!(
+            order,
+            vec!["Interview", "Recruiter", "Applied"],
+            "a recruiter screen is further along than a bare application"
+        );
+    }
+
+    #[test]
     fn status_sorts_by_pipeline_position_not_alphabetically() {
         let with_status = |company: &str, status: Option<&str>| JobRow {
             url: format!("https://x/{company}"),
@@ -1182,6 +1232,7 @@ mod tests {
                 "dismissed",
                 "untouched",
                 "applied",
+                "recruiter",
                 "interview",
                 "rejected",
                 "skipped",

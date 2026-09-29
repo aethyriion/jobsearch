@@ -379,3 +379,75 @@ seniority:
   # titles there is and genuinely states no level; excluding those would
   # throw away most of the list to avoid a handful of mismatches.
   include_unknown: true
+
+# ---------------------------------------------------------------------------
+# Hiring channel
+# ---------------------------------------------------------------------------
+# Patterns that mark a posting as coming from a STAFFING AGENCY rather than
+# the employer directly. Matched against the company name and the
+# description together, case-insensitively.
+#
+# This only ever produces "agency" — never "direct". "This reads like an
+# agency listing" is something the text can support; "this is a direct
+# hire" is merely the absence of that evidence, and recording it as a
+# positive would turn a non-observation into a fact. Postings with no
+# agency signal are left unlabelled, and you set them by hand (in the
+# manual-entry form, or with `jobsearch channel --url ... --set direct`)
+# where it matters.
+#
+# A manual value always wins over anything matched here.
+# Matched against the POSTING TEXT. Phrases only — a company name here
+# would hit customer lists ("brands including Randstad, Motorola, Netflix"
+# in a Dialpad posting matched `randstad` and mislabelled it an agency).
+#
+# These have to be narrow. Two that were tried and removed, with the hit
+# counts that condemned them:
+#   'talent acquisition partner'  21 hits, ~all wrong — it's EEO
+#                                 boilerplate ("speak to your talent
+#                                 acquisition partner") in DIRECT postings.
+#   bare 'our client(s)'          16 hits, mostly wrong — direct employers
+#                                 say it about their own customers
+#                                 ("our Client Success team").
+agency_text_patterns:
+  - '\bour client(?:s)?[,.]? (?:is|are|a |an )'
+  - '\bour client is (?:seeking|looking|hiring)\b'
+  - '\bon behalf of (?:our|a) client\b'
+  - '\bwe are partnering with (?:a|our) client\b'
+  - '\bpartnered with (?:a|our) client\b'
+  - '\bstaffing (?:agency|firm|solutions provider)\b'
+  - '\brecruit(?:ing|ment) (?:agency|firm)\b'
+  - '\bexecutive search firm\b'
+  - '\bcontract[- ]to[- ]hire\b'
+  - '\bc2h\b'
+  - '\bw2 contract\b'
+  - '\bcorp[- ]to[- ]corp\b'
+  - '\bc2c\b'
+  - '\b1099 contract\b'
+
+# Matched against the COMPANY NAME only. Add to this as you meet them.
+agency_company_patterns:
+  - '\bmotion recruitment\b'
+  - '\bapex systems\b'
+  - '\bvertalents\b'
+  - '\bspar information\b'
+  - '\brobert half\b'
+  - '\bteksystems\b'
+  - '\binsight global\b'
+  - '\bcybercoders\b'
+  - '\bjobot\b'
+  - '\bkforce\b'
+  - '\bmodis\b'
+  - '\bexperis\b'
+  - '\brandstad\b'
+  - '\bmichael page\b'
+  - '\bharnham\b'
+  - '\bqdss\b'
+  - '\blemon\.io\b'
+  - '\bturing\.com\b'
+  - '\btoptal\b'
+  - '\bcrossover\b'
+  - '\bedify technologies\b'
+  - '\bcollabera\b'
+  - '\bmindlance\b'
+  - '\bdiverse lynx\b'
+  - '\bsynechron\b'

@@ -4,7 +4,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap};
 
 use super::app::{App, Mode, Pane};
-use crate::model::{JobRow, Seniority, Stage};
+use crate::model::{Channel, JobRow, Seniority, Stage};
 
 /// Colors are chosen to stay legible on both light and dark terminals:
 /// no bright-on-bright, and never color as the *only* carrier of meaning —
@@ -113,6 +113,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     if app.mode == Mode::TechPicker {
         draw_tech_picker(f, f.area(), app);
+    }
+    if app.mode == Mode::ConfirmEvaluateAll {
+        draw_confirm_evaluate(f, f.area(), app);
     }
 }
 
@@ -226,6 +229,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
     let header = Row::new(vec![
         Cell::from("scr"),
         Cell::from(""),
+        Cell::from(""),
         Cell::from("company"),
         Cell::from("title"),
         Cell::from("lvl"),
@@ -269,6 +273,16 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
                 } else {
                     Style::default().fg(Color::Magenta)
                 }),
+                // Agency listings are the ones worth spotting from across
+                // the list: a different process, and often the same role
+                // three times under different URLs.
+                Cell::from(r.channel.map(Channel::short).unwrap_or(" ")).style(if r.is_agency() {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                }),
                 Cell::from(r.company.clone()).style(if r.dismissed {
                     Style::default().fg(Color::DarkGray)
                 } else {
@@ -295,6 +309,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
 
     let widths = [
         Constraint::Length(3),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Percentage(22),
         Constraint::Fill(1),
@@ -428,6 +443,33 @@ fn detail_lines(row: &JobRow) -> Vec<Line<'static>> {
                     Some(r) if !r.is_empty() => format!("  {r}   (u restores)"),
                     _ => "  u restores".to_string(),
                 },
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    }
+
+    if let Some(channel) = row.channel {
+        lines.push(Line::from(vec![
+            Span::styled(
+                match channel {
+                    Channel::Agency => " STAFFING AGENCY ",
+                    Channel::Referral => " REFERRAL ",
+                    Channel::Inbound => " RECRUITER OUTREACH ",
+                    Channel::Direct => " DIRECT ",
+                },
+                if channel == Channel::Agency {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                },
+            ),
+            Span::styled(
+                row.channel_source
+                    .map(|s| format!("  ({})", s.label()))
+                    .unwrap_or_default(),
                 Style::default().fg(Color::DarkGray),
             ),
         ]));
@@ -625,6 +667,7 @@ fn draw_keys(f: &mut Frame, area: Rect, app: &App) {
         Mode::ConfirmDismissJob | Mode::ConfirmDismissCompany => {
             "y hide it · any other key cancel".to_string()
         }
+        Mode::ConfirmEvaluateAll => "y score them · any other key cancel".to_string(),
         Mode::TechPicker => {
             "type to filter · ↑/↓ move · enter select · 0 clear · esc cancel".to_string()
         }
@@ -636,12 +679,12 @@ fn draw_keys(f: &mut Frame, area: Rect, app: &App) {
         Mode::Normal => {
             if area.width >= 132 {
                 "j/k move · / search · s startup · L level · f ai · m status · S sort · \
-                 t tech · 1-5 mark · x hide · X hide co · u undo · a add · c edit · n note · \
-                 o open · r fetch · e eval · ? help · q quit"
+                 t tech · 1-6 mark · x hide · X hide co · u undo · a add · c edit · n note · \
+                 o open · r fetch · e score · ? help · q quit"
                     .to_string()
             } else if area.width >= 92 {
                 "j/k move · / search · s startup · L level · t tech · m status · S sort · \
-                 1-5 mark · x hide · u undo · a add · ? help · q quit"
+                 1-6 mark · x hide · u undo · a add · ? help · q quit"
                     .to_string()
             } else {
                 "s startup · L level · t tech · m status · x hide · a add · ? help".to_string()
@@ -680,8 +723,9 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from("               (status sorts interview first, untouched last)"),
         Line::from("           R   reverse sort"),
         Line::from(""),
-        Line::from("  TRIAGE   1 applied   2 interview   3 rejected"),
-        Line::from("           4 skipped   5 silence     0 clear"),
+        Line::from("  TRIAGE   in pipeline order:"),
+        Line::from("           1 applied   2 recruiter  3 interview"),
+        Line::from("           4 rejected  5 skipped    6 silence   0 clear"),
         Line::from("           n   edit notes          o  open in browser"),
         Line::from(""),
         Line::from("  HIDE     x   hide this posting (stays hidden across refreshes)"),
@@ -695,7 +739,8 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from("           D   delete it (hand-entered rows only)"),
         Line::from(""),
         Line::from("  RUN      r   fetch new jobs from every configured source"),
-        Line::from("           e   score unevaluated jobs with Claude (costs money)"),
+        Line::from("           e   score JUST the selected row with Claude"),
+        Line::from("           E   score every unscored row in view (asks first)"),
         Line::from("           F5  reload from the database"),
         Line::from(""),
         Line::from(Span::styled(
@@ -704,6 +749,10 @@ fn draw_help(f: &mut Frame, area: Rect) {
         )),
         Line::from(Span::styled(
             "  always stored, so toggling it never needs a re-fetch.",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "  Channel: A agency · R referral · I inbound · D direct.",
             Style::default().fg(Color::DarkGray),
         )),
         Line::from(Span::styled(
@@ -1161,5 +1210,53 @@ fn draw_tech_picker(f: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::DarkGray),
         )),
         rows[1],
+    );
+}
+
+/// The batch-scoring confirmation.
+///
+/// States the count, because that's what the bill is proportional to and
+/// it's invisible from the list when filters are on.
+fn draw_confirm_evaluate(f: &mut Frame, area: Rect, app: &App) {
+    let n = app.unscored_in_scope();
+    let popup = centered_rect(58, 30, area);
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("  Score "),
+                Span::styled(
+                    format!("{n}"),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" unscored postings with Claude?"),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  This is the only thing here that costs money. The current",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "  startup and level filters decide what's in the queue.",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  `e` scores just the selected row instead.",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from("  y to score · any other key to cancel"),
+        ])
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .title(" score all "),
+        ),
+        popup,
     );
 }
