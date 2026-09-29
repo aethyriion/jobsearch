@@ -297,6 +297,7 @@ mod tests {
             truncated_description_min_chars: 400,
             startup: StartupPolicyConfig::default(),
             seniority: SeniorityPolicyConfig::default(),
+            staleness: Default::default(),
             agency_text_patterns: vec![],
             agency_company_patterns: vec![],
         })

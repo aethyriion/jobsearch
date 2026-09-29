@@ -192,6 +192,15 @@ enum Command {
     /// List everything currently hidden.
     Dismissed,
 
+    /// Applications that have gone quiet — anything sitting in the same
+    /// status longer than `filters.yaml`'s `staleness` allows.
+    Stale {
+        /// Show every tracked application with its age, not just the
+        /// ones past their threshold.
+        #[arg(long)]
+        all: bool,
+    },
+
     /// What technologies your candidates actually mention — the split
     /// between AWS and GCP, who uses Rust, and so on. Deterministic: this
     /// reads `tech.yaml`'s patterns over stored descriptions, with no
@@ -334,6 +343,7 @@ async fn async_main() -> Result<()> {
         } => cmd_dismiss(&paths, url, company, reason),
         Command::Restore { url, company } => cmd_restore(&paths, url, company),
         Command::Dismissed => cmd_dismissed(&paths),
+        Command::Stale { all } => cmd_stale(&paths, all),
         Command::Channel { url, set } => cmd_channel(&paths, url, set),
         Command::Tech {
             tag,
@@ -1048,6 +1058,69 @@ fn cmd_restore(paths: &Paths, url: Option<String>, company: Option<String>) -> R
             println!("Restored every posting from {company}");
         }
         _ => anyhow::bail!("pass --url <URL> or --company <NAME>"),
+    }
+    Ok(())
+}
+
+/// Terminal statuses (rejected, skipped, silence) are deliberately absent
+/// from the thresholds, so they never appear here: a rejection doesn't go
+/// stale, it's just over.
+fn cmd_stale(paths: &Paths, all: bool) -> Result<()> {
+    let filters = load_filters(paths)?;
+    let store = open_store(paths)?;
+    let mut rows: Vec<_> = store
+        .all_stored()?
+        .into_iter()
+        .filter(|r| !r.dismissed && r.my_status.is_some())
+        .filter(|r| all || filters.is_stale(r))
+        .collect();
+
+    if rows.is_empty() {
+        if all {
+            println!("Nothing tracked yet. Mark a row with 1-6 in the TUI.");
+        } else {
+            println!("Nothing has gone quiet. Every tracked application is inside its window:");
+            for (status, days) in &filters.staleness {
+                println!("  {status:<10} {days} days");
+            }
+        }
+        return Ok(());
+    }
+
+    // Longest wait first: the list is a queue to work down, not a report.
+    rows.sort_by_key(|r| std::cmp::Reverse(r.status_age_days().unwrap_or(0)));
+
+    println!(
+        "{} {}\n",
+        rows.len(),
+        if all {
+            "tracked application(s)"
+        } else {
+            "application(s) past their threshold"
+        }
+    );
+    println!(
+        "  {:<10} {:<5} {:<24} {:<44} over",
+        "status", "age", "company", "title"
+    );
+    for r in &rows {
+        let over = filters
+            .staleness_days(r)
+            .map(|d| format!("+{d}d"))
+            .unwrap_or_default();
+        println!(
+            "  {:<10} {:<5} {:<24} {:<44} {}",
+            r.my_status.as_deref().unwrap_or(""),
+            r.age_label().unwrap_or_else(|| "?".into()),
+            truncate(&r.company, 24),
+            truncate(&r.title, 44),
+            over
+        );
+    }
+    if !all {
+        println!(
+            "\nThresholds come from filters.yaml. Move one to `silence` in the TUI (key 6)\nonce you've stopped counting on it."
+        );
     }
     Ok(())
 }

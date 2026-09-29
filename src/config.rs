@@ -217,6 +217,16 @@ fn default_min_level() -> String {
     "junior".to_string()
 }
 
+fn default_staleness() -> BTreeMap<String, i64> {
+    // Mirrors the shipped filters.yaml so a config without the section
+    // still flags the obvious cases rather than silently flagging nothing.
+    BTreeMap::from([
+        ("interview".to_string(), 21),
+        ("recruiter".to_string(), 14),
+        ("applied".to_string(), 28),
+    ])
+}
+
 fn default_max_level() -> String {
     "staff".to_string()
 }
@@ -258,6 +268,10 @@ pub struct FiltersConfig {
     /// posting is not an agency listing.
     #[serde(default)]
     pub agency_company_patterns: Vec<String>,
+    /// Days-in-status before a tracked application is flagged as stale,
+    /// keyed by status name. Absent statuses are never flagged.
+    #[serde(default = "default_staleness")]
+    pub staleness: BTreeMap<String, i64>,
 }
 
 fn default_truncated_min() -> usize {
