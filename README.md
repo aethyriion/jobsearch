@@ -458,13 +458,67 @@ TIMELINE
 interviewed yesterday" are different situations, and the current status
 alone can't tell them apart.
 
+## Two scores, not one
+
+The AI step answers two questions separately, because they fail in opposite
+directions and a single number can't say which one you're looking at:
+
+- **`qualified`** — do you clear the bar *this posting sets*? Judged only
+  against what the posting states. Being more experienced than it asks for
+  never lowers this, and an unfamiliar product domain doesn't either unless
+  the posting requires domain experience.
+- **`seen`** — the estimated chance a human or an ATS screen actually
+  surfaces your application. 50 is average.
+
+`match_score` combines them (roughly 70/30), so sorting by score still means
+"worth applying to". But the detail pane shows both, plus the specific
+reasons behind the odds:
+
+```
+72/100  APPLY
+qualified 82   seen by a human 42
+Posted 2 days ago at a well-known public fintech (high application volume
+for remote US roles), but the posting explicitly requires Python or Kotlin
+proficiency, which will screen out some of the general applicant pool.
+```
+
+The split is what makes a low score actionable. `qualified 30 / seen 70` means
+don't bother. `qualified 90 / seen 20` means you'd walk the interview but the
+application will drown — find a referral, or apply anyway knowing the odds.
+Those are different decisions, and one blended number hides which you have.
+
+`S` sorts by `odds` and by `qualified` as well as by `score`.
+
+### What lowers the odds
+
+Judged from the posting and its metadata — posting age and agency-vs-direct
+are passed in explicitly, since neither appears in the JD text:
+
+| Lowers | Raises |
+|---|---|
+| A large or well-known employer with a fully-remote req | A small company where a founder reads every application |
+| A posting more than ~45 days old | A niche stack that shrinks the pool (Rust, Nix) |
+| ATS knockouts you miss — required degree, cert, clearance | A narrow geography |
+| A staffing-agency listing with no real req behind it | An unusual skill combination you genuinely have |
+| Being visibly over-leveled for the band | A posting describing a specific problem, not a generic req |
+
+Over-qualification lives here rather than in `qualified`, which is the point:
+being a ten-year engineer applying to a role asking for four is not a gap, but
+it *is* something a recruiter screens on.
+
+### After changing the prompt or profile
+
+Stored verdicts were reached under whatever rubric was in force at the time.
+`jobsearch evaluate --rescore` re-runs everything; it prints how many already
+have a score before spending anything, and `--dry-run` shows the queue first.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `jobsearch` / `jobsearch tui` | The review TUI. Fetch (`r`), score (`e`) and triage without leaving it. |
 | `jobsearch fetch` | Pull from every configured source, filter, dedup, store. Free. `--company <slug>` or `--aggregator <substring>` to run one source in isolation. |
-| `jobsearch evaluate` | Score unevaluated candidates with Claude. **The only step that costs money.** `--url <URL>` scores exactly one, ignoring every queue policy and re-scoring one that already has a score. `--dry-run` to see the queue, `--limit N` to cap, `--all-stages` to score beyond startups. |
+| `jobsearch evaluate` | Score unevaluated candidates with Claude. **The only step that costs money.** `--url <URL>` scores exactly one, ignoring every queue policy and re-scoring one that already has a score. `--rescore` re-scores everything, for after you change the prompt or `profile.yaml`. `--dry-run` to see the queue, `--limit N` to cap, `--all-stages` to score beyond startups. |
 | `jobsearch discover-yc` | Pull the YC directory, record stages, resolve ATS boards. |
 | `jobsearch refilter` | Re-apply the current `filters.yaml` to everything already stored, without re-fetching. Run it after editing filters. |
 | `jobsearch add` | Record an application by hand, for scripting. `--description-file -` reads the JD from stdin. The TUI's `a` key is the interactive version. |

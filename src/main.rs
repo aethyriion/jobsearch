@@ -91,6 +91,12 @@ enum Command {
         /// re-score after pasting in a better description.
         #[arg(long, value_name = "URL")]
         url: Option<String>,
+        /// Re-score postings that already have a score, not just new ones.
+        /// Use after changing the prompt or profile.yaml — every stored
+        /// verdict was reached under the rubric in force at the time.
+        /// Costs money for every row, so pair it with --dry-run first.
+        #[arg(long)]
+        rescore: bool,
     },
 
     /// Re-apply the current filters.yaml to everything already stored,
@@ -297,7 +303,8 @@ async fn async_main() -> Result<()> {
             limit,
             all_stages,
             url,
-        } => cmd_evaluate(&paths, dry_run, limit, all_stages, url).await,
+            rescore,
+        } => cmd_evaluate(&paths, dry_run, limit, all_stages, url, rescore).await,
         Command::Refilter { dry_run } => cmd_refilter(&paths, dry_run),
         Command::DiscoverYc {
             limit,
@@ -565,6 +572,7 @@ async fn cmd_evaluate(
     limit: Option<usize>,
     all_stages: bool,
     url: Option<String>,
+    rescore: bool,
 ) -> Result<()> {
     let filters = load_filters(paths)?;
     let store = open_store(paths)?;
@@ -591,12 +599,18 @@ async fn cmd_evaluate(
     let startup_only = !all_stages && filters.startup.enabled_by_default;
 
     let policy = startup_only.then_some(&filters.startup);
-    let mut queue = store.unevaluated(policy, Some(&filters.seniority))?;
+    let mut queue = store.evaluation_queue(policy, Some(&filters.seniority), rescore)?;
     if let Some(limit) = limit {
         queue.truncate(limit);
     }
 
     println!("Levels in scope: {}", filters.seniority.describe());
+    if rescore {
+        // A re-score is the one evaluate run that spends money on work
+        // already paid for, so it says so up front rather than after.
+        let already = queue.iter().filter(|j| j.match_score.is_some()).count();
+        println!("Re-scoring: {already} of these already have a score and will be overwritten.");
+    }
     println!(
         "{} candidate(s) queued for AI evaluation{}.",
         queue.len(),

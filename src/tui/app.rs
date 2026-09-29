@@ -55,6 +55,10 @@ pub enum SortKey {
     /// How long the current status has been sitting. Untracked rows have
     /// no age and sort last either way.
     Age,
+    /// Estimated chance the application gets read.
+    Odds,
+    /// Whether you clear the posting's stated bar, ignoring the odds.
+    Qualified,
 }
 
 impl SortKey {
@@ -68,6 +72,8 @@ impl SortKey {
             SortKey::Status => "status",
             SortKey::Level => "level",
             SortKey::Age => "age",
+            SortKey::Odds => "odds",
+            SortKey::Qualified => "qualified",
         }
     }
 
@@ -80,7 +86,9 @@ impl SortKey {
             SortKey::Posted => SortKey::Status,
             SortKey::Status => SortKey::Level,
             SortKey::Level => SortKey::Age,
-            SortKey::Age => SortKey::Score,
+            SortKey::Age => SortKey::Odds,
+            SortKey::Odds => SortKey::Qualified,
+            SortKey::Qualified => SortKey::Score,
         }
     }
 }
@@ -458,6 +466,14 @@ impl App {
                 // Oldest first when descending, which is what you want:
                 // the thing that's been sitting longest is the one to
                 // chase. Untracked rows sort last in both directions.
+                SortKey::Odds => ra
+                    .callback_odds
+                    .unwrap_or(-1)
+                    .cmp(&rb.callback_odds.unwrap_or(-1)),
+                SortKey::Qualified => ra
+                    .qualification_match
+                    .unwrap_or(-1)
+                    .cmp(&rb.qualification_match.unwrap_or(-1)),
                 SortKey::Age => ra
                     .status_age_days()
                     .unwrap_or(-1)
@@ -638,7 +654,10 @@ impl App {
         self.sort = self.sort.next();
         // Status sorts ascending so the live end of the pipeline
         // (interview, then applied) is at the top rather than the bottom.
-        self.sort_desc = matches!(self.sort, SortKey::Score | SortKey::Posted | SortKey::Age);
+        self.sort_desc = matches!(
+            self.sort,
+            SortKey::Score | SortKey::Posted | SortKey::Age | SortKey::Odds | SortKey::Qualified
+        );
         self.recompute();
         self.status = format!(
             "sorted by {} {}",
