@@ -60,6 +60,7 @@ fn my_status_style(status: Option<&str>) -> Style {
         Some("interview") => Style::default()
             .fg(Color::Magenta)
             .add_modifier(Modifier::BOLD),
+        Some("recruiter") => Style::default().fg(Color::Cyan),
         Some("rejected") => Style::default().fg(Color::Red),
         Some("skipped") | Some("silence") => Style::default().fg(Color::DarkGray),
         _ => Style::default(),
@@ -178,6 +179,19 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         }
     }
 
+    // Stale rows are the only count on this bar that's a to-do rather
+    // than a statistic, so it gets a color the rest of the bar doesn't
+    // use and sits next to the status tally it's drawn from.
+    if app.stale_count() > 0 {
+        spans.push(Span::styled(
+            format!("  {} stale ", app.stale_count()),
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
     spans.push(Span::styled(
         format!(
             "  ai:{} mine:{} lvl:{} tech:{} sort:{}{}",
@@ -236,7 +250,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
         Cell::from("stg"),
         Cell::from("stack"),
         Cell::from("rec"),
-        Cell::from("mine"),
+        Cell::from("mine · age"),
     ])
     .style(
         Style::default()
@@ -301,8 +315,26 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
                 Cell::from(r.tech_summary_pinned(2, app.tech_filter.as_ref()))
                     .style(Style::default().fg(Color::Green)),
                 Cell::from(r.ai_status().to_string()).style(recommendation_style(r.ai_status())),
-                Cell::from(r.my_status.clone().unwrap_or_default())
-                    .style(my_status_style(r.my_status.as_deref())),
+                // Status and age share one cell rather than taking two.
+                // They're read together — "applied, and it's been three
+                // weeks" is one thought — and the list is already wide.
+                // Red on the age means it's past the staleness threshold
+                // for that status: time to chase it or call it dead.
+                Cell::from(Line::from(vec![
+                    Span::styled(
+                        r.my_status.clone().unwrap_or_default(),
+                        my_status_style(r.my_status.as_deref()),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        r.age_label().unwrap_or_default(),
+                        if app.is_stale(r) {
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        },
+                    ),
+                ])),
             ])
         })
         .collect();
@@ -317,7 +349,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
         Constraint::Length(4),
         Constraint::Length(14),
         Constraint::Length(8),
-        Constraint::Length(9),
+        Constraint::Length(13),
     ];
 
     let table = Table::new(rows, widths)
@@ -360,7 +392,7 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
     };
 
     f.render_widget(
-        Paragraph::new(detail_lines(row))
+        Paragraph::new(detail_lines(row, app.staleness_days(row)))
             .block(block)
             .wrap(Wrap { trim: false })
             .scroll((app.detail_scroll, 0)),
@@ -374,7 +406,7 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
 /// evidence for it, and the raw JD last. That puts the thing you'd act on
 /// at the top of a pane you may never scroll, rather than making you page
 /// past a full job description to find the score.
-fn detail_lines(row: &JobRow) -> Vec<Line<'static>> {
+fn detail_lines(row: &JobRow, stale_days: Option<i64>) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled(
             row.title.clone(),
@@ -516,10 +548,89 @@ fn detail_lines(row: &JobRow) -> Vec<Line<'static>> {
     }
 
     if let Some(status) = &row.my_status {
-        lines.push(Line::from(vec![
+        let mut head = vec![
             Span::styled("your status: ", Style::default().fg(Color::DarkGray)),
             Span::styled(status.clone(), my_status_style(Some(status))),
-        ]));
+        ];
+        if let Some(phrase) = row.age_phrase() {
+            head.push(Span::styled(
+                if phrase == "today" {
+                    "  ·  set today".to_string()
+                } else {
+                    format!("  ·  set {phrase}")
+                },
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        // How long it's been in play overall, which is a different
+        // question from how long it's been in this status: an interview
+        // set yesterday off an application from two months ago reads very
+        // differently from one off an application from last week.
+        if let Some(applied) = row.first_reached("applied").map(str::to_string) {
+            if status != "applied" {
+                if let Some(days) = crate::model::days_since(&applied) {
+                    head.push(Span::styled(
+                        format!("  ·  applied {}", crate::model::phrase_age(days)),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+            }
+        } else if let Some(days) = row.tracked_age_days() {
+            head.push(Span::styled(
+                format!("  ·  tracked {}", crate::model::phrase_age(days)),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        lines.push(Line::from(head));
+
+        // The nudge, not just the number: a threshold crossed is the only
+        // thing here that asks you to do something.
+        if let Some(over) = stale_days {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    " NO MOVEMENT — {} past the {status} threshold; chase it or press 6 for silence ",
+                    if over == 0 {
+                        "right at".to_string()
+                    } else {
+                        format!("{over}d")
+                    }
+                ),
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
+
+        // The whole path, not just where it landed. "applied 4 Aug,
+        // recruiter 2 Sep, still nothing" is a different situation from
+        // "recruiter yesterday", and the current status alone can't tell
+        // them apart.
+        if row.status_timeline.len() > 1 {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "TIMELINE",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for (st, at) in &row.status_timeline {
+                let label = st.clone().unwrap_or_else(|| "cleared".into());
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("  {:<10}", &at[..at.len().min(10)]),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(format!("{label:<10}"), my_status_style(st.as_deref())),
+                    Span::styled(
+                        crate::model::days_since(at)
+                            .map(|d| format!("  {}", crate::model::compact_age(d)))
+                            .unwrap_or_default(),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+            }
+        }
     }
     if let Some(notes) = &row.notes {
         lines.push(Line::from(""));
@@ -715,12 +826,14 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from("               shows only tags present in your data, with counts"),
         Line::from("           T   clear the technology filter"),
         Line::from("           f   AI verdict: all/apply/consider/skip/unscored"),
-        Line::from("           m   your status: all/tracked/dismissed/untouched/"),
-        Line::from("               applied/interview/rejected/skipped/silence"),
+        Line::from("           m   your status: all/tracked/stale/dismissed/"),
+        Line::from("               untouched/applied/recruiter/interview/"),
+        Line::from("               rejected/skipped/silence"),
         Line::from("           /   search company, title and location"),
         Line::from("           S   sort: score/company/title/stage/posted/"),
-        Line::from("               status/level"),
-        Line::from("               (status sorts interview first, untouched last)"),
+        Line::from("               status/level/age"),
+        Line::from("               (status sorts interview first, untouched last;"),
+        Line::from("                age sorts longest-untouched first)"),
         Line::from("           R   reverse sort"),
         Line::from(""),
         Line::from("  TRIAGE   in pipeline order:"),
@@ -735,7 +848,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from("               (m cycles to the 'dismissed' view to find them)"),
         Line::from(""),
         Line::from("  ENTRIES  a   add an application the scrapers never found"),
-        Line::from("           E   edit the selected row"),
+        Line::from("           c   edit the selected row"),
         Line::from("           D   delete it (hand-entered rows only)"),
         Line::from(""),
         Line::from("  RUN      r   fetch new jobs from every configured source"),
@@ -743,6 +856,15 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from("           E   score every unscored row in view (asks first)"),
         Line::from("           F5  reload from the database"),
         Line::from(""),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  The mine column shows how long a row has sat in its current",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "  status; red means past the filters.yaml staleness threshold.",
+            Style::default().fg(Color::DarkGray),
+        )),
         Line::from(Span::styled(
             "  Startup mode is a view, not a fetch setting — everything is",
             Style::default().fg(Color::DarkGray),

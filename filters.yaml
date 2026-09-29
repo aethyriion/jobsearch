@@ -451,3 +451,26 @@ agency_company_patterns:
   - '\bmindlance\b'
   - '\bdiverse lynx\b'
   - '\bsynechron\b'
+
+# ---------------------------------------------------------------------------
+# Staleness
+# ---------------------------------------------------------------------------
+# How many days a tracked application can sit in a status before the TUI
+# flags it and `jobsearch stale` lists it. Purely a prompt to act — nothing
+# is moved or changed automatically, because deciding a conversation is
+# over is a judgement call and the tool shouldn't make it for you.
+#
+# Defaults reflect how these actually go: an interview loop that's gone
+# quiet for three weeks is over; a recruiter screen resolves faster than
+# that; and a cold application was never likely to get a reply at all, so
+# it gets the longest leash before it's worth thinking about.
+#
+# Start the clock from the LAST transition, not from when you applied —
+# a recruiter who emails on day 10 resets it, which is what the status
+# history records.
+staleness:
+  interview: 21
+  recruiter: 14
+  applied: 28
+  # Anything not listed is never flagged. `rejected`, `skipped` and
+  # `silence` are terminal — there is nothing to chase.

@@ -115,6 +115,24 @@ CREATE TABLE IF NOT EXISTS dismissed_companies (
     dismissed_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Every status change, append-only. One row per transition, so the
+-- question "when did this become an interview" has an answer even after
+-- it moves on to something else.
+--
+-- A log rather than an applied_at/recruiter_at/... column set: statuses
+-- are a vocabulary that grows (recruiter was added after the fact), and
+-- each new one would otherwise mean a migration. It also records
+-- re-entries — a role that goes silent and then revives shows both.
+--
+-- `status` is NULL for a clear, which is a real event worth keeping.
+CREATE TABLE IF NOT EXISTS status_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT NOT NULL,
+    status TEXT,
+    at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_status_history_url ON status_history(url);
+
 -- Hiring channel set BY HAND. Only overrides live here: the inferred
 -- value is derived from the posting text on every read (see
 -- `model::infer_channel`), so improving the patterns takes effect without
@@ -194,6 +212,9 @@ impl ManualEntry {
 
 /// Dismissals as looked up at read time: the reason, keyed by job URL in
 /// one map and by normalized company name in the other.
+/// Status transitions per posting URL, oldest first.
+pub type StatusTimelines = std::collections::HashMap<String, Vec<(Option<String>, String)>>;
+
 pub type DismissalSets = (
     std::collections::HashMap<String, Option<String>>,
     std::collections::HashMap<String, Option<String>>,
@@ -227,12 +248,14 @@ impl Store {
         let _: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
         conn.execute_batch(SCHEMA)?;
         migrate(&conn)?;
-        Ok(Self {
+        let store = Self {
             conn,
             tech: TechDetector::empty(),
             agency_text: regex::RegexSet::empty(),
             agency_company: regex::RegexSet::empty(),
-        })
+        };
+        store.backfill_status_history()?;
+        Ok(store)
     }
 
     /// Attach the compiled agency patterns, so reads can infer a channel.
@@ -329,6 +352,46 @@ impl Store {
                 .execute("DELETE FROM job_channel WHERE url = ?1", params![url])?,
         };
         Ok(())
+    }
+
+    /// The status timeline for every tracked posting, oldest first.
+    ///
+    /// Loaded whole rather than per-row: one entry per transition means
+    /// this stays in the hundreds even after a long search, and having it
+    /// in hand lets the detail pane show a real timeline for free.
+    pub fn status_timelines(&self) -> Result<StatusTimelines> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT url, status, at FROM status_history ORDER BY at ASC, id ASC")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            ))
+        })?;
+        let mut out: StatusTimelines = Default::default();
+        for row in rows {
+            let (url, status, at) = row?;
+            out.entry(url).or_default().push((status, at));
+        }
+        Ok(out)
+    }
+
+    /// Backfill a timeline entry for rows marked before the log existed,
+    /// using `user_status.updated_at` as the best timestamp available.
+    ///
+    /// Without this, every status set before this shipped would read as
+    /// age-unknown, and the staleness view would be empty exactly when
+    /// it's most wanted. Runs once at open and is a no-op thereafter.
+    pub fn backfill_status_history(&self) -> Result<usize> {
+        Ok(self.conn.execute(
+            "INSERT INTO status_history (url, status, at) \
+             SELECT us.url, us.my_status, us.updated_at FROM user_status us \
+             WHERE us.my_status IS NOT NULL \
+               AND NOT EXISTS (SELECT 1 FROM status_history sh WHERE sh.url = us.url)",
+            [],
+        )?)
     }
 
     fn channel_overrides(
@@ -725,6 +788,31 @@ impl Store {
         // assumes.
         let status = my_status.filter(|s| !s.is_empty());
         let notes = notes.filter(|s| !s.is_empty());
+
+        // Only log a genuine transition. `save_user_status` is also the
+        // notes-editing path, and appending there would both spam the log
+        // and reset the age — making a row you just annotated look freshly
+        // moved, which is the opposite of what the age column is for.
+        let previous: Option<Option<String>> = self
+            .conn
+            .query_row(
+                "SELECT my_status FROM user_status WHERE url = ?1",
+                params![url],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let changed = match &previous {
+            Some(prev) => prev.as_deref() != status,
+            None => status.is_some(),
+        };
+        if changed {
+            self.conn.execute(
+                "INSERT INTO status_history (url, status, at) \
+                 VALUES (?1, ?2, CURRENT_TIMESTAMP)",
+                params![url, status],
+            )?;
+        }
+
         self.conn.execute(
             "INSERT INTO user_status (url, my_status, notes, updated_at) \
              VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP) \
@@ -861,6 +949,20 @@ impl Store {
         let mut rows: Vec<JobRow> = rows.collect::<Result<Vec<_>, _>>()?;
         self.attach_stages(&mut rows)?;
         self.attach_dismissals(&mut rows)?;
+        // Status age, from the transition log.
+        let timelines = self.status_timelines()?;
+        for row in rows.iter_mut() {
+            let Some(entries) = timelines.get(&row.url) else {
+                continue;
+            };
+            row.status_since = entries.last().map(|(_, at)| at.clone());
+            // When it FIRST entered the pipeline, which is a different and
+            // also useful number: "applied 6 weeks ago, interviewed 3 days
+            // ago" is the shape of a real conversation.
+            row.first_tracked_at = entries.first().map(|(_, at)| at.clone());
+            row.status_timeline = entries.clone();
+        }
+
         // Channel: the hand-set override wins; otherwise infer from the
         // text. Same precedence shape as company stage.
         let overrides = self.channel_overrides()?;
@@ -1583,5 +1685,82 @@ mod tests {
         let queue = s.unevaluated(Some(&policy), None).unwrap();
         assert_eq!(queue.len(), 1);
         assert_eq!(queue[0].company, "Fly.io");
+    }
+
+    #[test]
+    fn the_status_log_records_transitions_and_ignores_notes_edits() {
+        let s = store();
+        s.save_details(&job("Fly.io", "SRE", "u1"), true).unwrap();
+
+        s.save_user_status("u1", Some("applied"), None).unwrap();
+        s.save_user_status("u1", Some("recruiter"), None).unwrap();
+        // Same status, new notes: an annotation, not a move. Logging this
+        // would reset the age and make a row you just commented on look
+        // freshly progressed.
+        s.save_user_status("u1", Some("recruiter"), Some("call Thursday"))
+            .unwrap();
+
+        let timeline = s.status_timelines().unwrap();
+        let entries = &timeline["u1"];
+        assert_eq!(
+            entries
+                .iter()
+                .map(|(st, _)| st.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("applied"), Some("recruiter")],
+        );
+    }
+
+    #[test]
+    fn clearing_a_status_is_itself_a_transition() {
+        let s = store();
+        s.save_details(&job("Fly.io", "SRE", "u1"), true).unwrap();
+        s.save_user_status("u1", Some("applied"), None).unwrap();
+        s.save_user_status("u1", None, None).unwrap();
+
+        let timeline = s.status_timelines().unwrap();
+        assert_eq!(timeline["u1"].len(), 2);
+        assert_eq!(timeline["u1"][1].0, None);
+    }
+
+    #[test]
+    fn the_backfill_gives_pre_existing_marks_an_age_and_runs_once() {
+        let s = store();
+        s.save_details(&job("Fly.io", "SRE", "u1"), true).unwrap();
+        // A row marked before the log existed: user_status set directly,
+        // with nothing in status_history.
+        s.conn
+            .execute(
+                "INSERT INTO user_status (url, my_status, updated_at) \
+                 VALUES ('u1', 'applied', '2025-01-02 03:04:05')",
+                [],
+            )
+            .unwrap();
+
+        assert_eq!(s.backfill_status_history().unwrap(), 1);
+        assert_eq!(
+            s.backfill_status_history().unwrap(),
+            0,
+            "must be idempotent"
+        );
+
+        let timeline = s.status_timelines().unwrap();
+        assert_eq!(
+            timeline["u1"],
+            vec![(Some("applied".into()), "2025-01-02 03:04:05".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_row_carries_its_status_age_when_read_back() {
+        let s = store();
+        s.save_details(&job("Fly.io", "SRE", "u1"), true).unwrap();
+        s.save_user_status("u1", Some("applied"), None).unwrap();
+
+        let rows = s.all_stored().unwrap();
+        let row = rows.iter().find(|r| r.url == "u1").unwrap();
+        assert!(row.status_since.is_some());
+        assert_eq!(row.status_age_days(), Some(0));
+        assert_eq!(row.age_label().as_deref(), Some("0d"));
     }
 }

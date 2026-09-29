@@ -52,6 +52,9 @@ pub enum SortKey {
     Status,
     /// Role seniority, lowest rung first.
     Level,
+    /// How long the current status has been sitting. Untracked rows have
+    /// no age and sort last either way.
+    Age,
 }
 
 impl SortKey {
@@ -64,6 +67,7 @@ impl SortKey {
             SortKey::Posted => "posted",
             SortKey::Status => "status",
             SortKey::Level => "level",
+            SortKey::Age => "age",
         }
     }
 
@@ -75,7 +79,8 @@ impl SortKey {
             SortKey::Stage => SortKey::Posted,
             SortKey::Posted => SortKey::Status,
             SortKey::Status => SortKey::Level,
-            SortKey::Level => SortKey::Score,
+            SortKey::Level => SortKey::Age,
+            SortKey::Age => SortKey::Score,
         }
     }
 }
@@ -131,6 +136,9 @@ pub enum MyFilter {
     All,
     /// Anything you've acted on at all — the application tracker view.
     Tracked,
+    /// Tracked rows that have sat in the same status past its configured
+    /// threshold. The follow-up queue.
+    Stale,
     /// The rows you've hidden. The only view that shows them, and where
     /// `u` puts one back.
     Dismissed,
@@ -148,6 +156,7 @@ impl MyFilter {
         match self {
             MyFilter::All => "all",
             MyFilter::Tracked => "tracked",
+            MyFilter::Stale => "stale",
             MyFilter::Dismissed => "dismissed",
             MyFilter::Untouched => "untouched",
             MyFilter::Applied => "applied",
@@ -166,7 +175,11 @@ impl MyFilter {
             // chain: both are "rows I've made a decision about", and
             // burying the only way to find a hidden row nine keypresses
             // deep would make it effectively undiscoverable.
-            MyFilter::Tracked => MyFilter::Dismissed,
+            // Stale sits directly after Tracked because it's a subset of
+            // it: "everything I'm tracking", then "the part that's gone
+            // quiet".
+            MyFilter::Tracked => MyFilter::Stale,
+            MyFilter::Stale => MyFilter::Dismissed,
             MyFilter::Dismissed => MyFilter::Untouched,
             MyFilter::Untouched => MyFilter::Applied,
             MyFilter::Applied => MyFilter::Recruiter,
@@ -178,7 +191,9 @@ impl MyFilter {
         }
     }
 
-    fn matches(self, row: &JobRow) -> bool {
+    /// `stale` is passed in rather than derived here: staleness depends on
+    /// the configured per-status thresholds, which a plain enum can't see.
+    fn matches(self, row: &JobRow, stale: bool) -> bool {
         // Dismissed rows are invisible to every other filter value. That's
         // the whole point — they only appear when you ask for them, and
         // `Dismissed` is the only value that asks.
@@ -191,6 +206,7 @@ impl MyFilter {
         match self {
             MyFilter::All => true,
             MyFilter::Tracked => row.my_status.is_some(),
+            MyFilter::Stale => stale,
             MyFilter::Untouched => row.my_status.is_none(),
             other => row.my_status.as_deref() == Some(other.label()),
         }
@@ -275,6 +291,10 @@ pub struct App {
     pub startup_only: bool,
     pub startup_policy: StartupPolicy,
     pub seniority_policy: SeniorityPolicy,
+    /// Days-in-status before a tracked row is flagged. Copied in rather
+    /// than reached for through `Filters`, so rendering never needs the
+    /// whole filter set.
+    pub staleness: std::collections::BTreeMap<String, i64>,
     pub level_filter: LevelFilter,
     pub ai_filter: AiFilter,
     pub my_filter: MyFilter,
@@ -318,6 +338,7 @@ impl App {
         rows: Vec<JobRow>,
         startup_policy: StartupPolicy,
         seniority_policy: SeniorityPolicy,
+        staleness: std::collections::BTreeMap<String, i64>,
     ) -> Self {
         let mut app = Self {
             rows,
@@ -330,6 +351,7 @@ impl App {
             startup_only: startup_policy.enabled_by_default,
             startup_policy,
             seniority_policy,
+            staleness,
             level_filter: LevelFilter::Policy,
             ai_filter: AiFilter::All,
             my_filter: MyFilter::All,
@@ -396,7 +418,7 @@ impl App {
                 if !self.ai_filter.matches(row) {
                     return false;
                 }
-                if !self.my_filter.matches(row) {
+                if !self.my_filter.matches(row, self.is_stale(row)) {
                     return false;
                 }
                 if !needle.is_empty() {
@@ -433,6 +455,13 @@ impl App {
                 SortKey::Posted => ra.posted_at.cmp(&rb.posted_at),
                 // Unlabelled last in either direction: it's an absence,
                 // and burying it beats having it head the list.
+                // Oldest first when descending, which is what you want:
+                // the thing that's been sitting longest is the one to
+                // chase. Untracked rows sort last in both directions.
+                SortKey::Age => ra
+                    .status_age_days()
+                    .unwrap_or(-1)
+                    .cmp(&rb.status_age_days().unwrap_or(-1)),
                 SortKey::Level => ra
                     .seniority()
                     .map(|l| l as u8)
@@ -609,7 +638,7 @@ impl App {
         self.sort = self.sort.next();
         // Status sorts ascending so the live end of the pipeline
         // (interview, then applied) is at the top rather than the bottom.
-        self.sort_desc = matches!(self.sort, SortKey::Score | SortKey::Posted);
+        self.sort_desc = matches!(self.sort, SortKey::Score | SortKey::Posted | SortKey::Age);
         self.recompute();
         self.status = format!(
             "sorted by {} {}",
@@ -879,6 +908,25 @@ impl App {
             .count()
     }
 
+    /// Days past its threshold, or None if this row isn't stale.
+    pub fn staleness_days(&self, row: &JobRow) -> Option<i64> {
+        let status = row.my_status.as_deref()?;
+        let threshold = *self.staleness.get(status)?;
+        let age = row.status_age_days()?;
+        (age >= threshold).then_some(age - threshold)
+    }
+
+    pub fn is_stale(&self, row: &JobRow) -> bool {
+        self.staleness_days(row).is_some()
+    }
+
+    pub fn stale_count(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| !r.dismissed && self.is_stale(r))
+            .count()
+    }
+
     pub fn dismissed_count(&self) -> usize {
         self.rows.iter().filter(|r| r.dismissed).count()
     }
@@ -1002,6 +1050,7 @@ mod tests {
             ],
             policy(),
             level_policy(),
+            Default::default(),
         )
     }
 
@@ -1067,6 +1116,7 @@ mod tests {
             ],
             policy(),
             level_policy(),
+            Default::default(),
         );
         a.sort = SortKey::Score;
         a.sort_desc = true;
@@ -1114,6 +1164,7 @@ mod tests {
             ],
             policy(),
             level_policy(),
+            Default::default(),
         );
         a.sort = SortKey::Status;
         a.sort_desc = false;
@@ -1144,6 +1195,7 @@ mod tests {
             ],
             policy(),
             level_policy(),
+            Default::default(),
         );
         a.sort = SortKey::Status;
         a.sort_desc = false;
@@ -1173,6 +1225,7 @@ mod tests {
             ],
             policy(),
             level_policy(),
+            Default::default(),
         );
         a.my_filter = MyFilter::Tracked;
         a.recompute();
@@ -1198,6 +1251,7 @@ mod tests {
             vec![hidden("Visible", false), hidden("Hidden", true)],
             policy(),
             level_policy(),
+            Default::default(),
         );
 
         for filter in [MyFilter::All, MyFilter::Tracked, MyFilter::Applied] {
@@ -1211,6 +1265,44 @@ mod tests {
         a.recompute();
         assert_eq!(a.view.len(), 1);
         assert_eq!(a.rows[a.view[0]].company, "Hidden");
+    }
+
+    #[test]
+    fn the_stale_filter_shows_only_rows_past_their_own_threshold() {
+        let aged = |company: &str, status: &str, days: i64| {
+            let at = chrono::Utc::now() - chrono::Duration::days(days);
+            JobRow {
+                company: company.into(),
+                my_status: Some(status.into()),
+                status_since: Some(at.format("%Y-%m-%d %H:%M:%S").to_string()),
+                // The test policy excludes unknown stages, and this test
+                // is about staleness, not startup mode.
+                stage: Some(Stage::Seed),
+                ..Default::default()
+            }
+        };
+        let mut a = App::new(
+            vec![
+                aged("Overdue", "recruiter", 30),
+                aged("Fresh", "recruiter", 2),
+                // Past 30 days, but `rejected` has no threshold at all —
+                // a closed door doesn't need chasing.
+                aged("Closed", "rejected", 300),
+                JobRow {
+                    company: "Untouched".into(),
+                    stage: Some(Stage::Seed),
+                    ..Default::default()
+                },
+            ],
+            policy(),
+            level_policy(),
+            [("recruiter".to_string(), 14)].into_iter().collect(),
+        );
+        a.my_filter = MyFilter::Stale;
+        a.recompute();
+        assert_eq!(a.view.len(), 1);
+        assert_eq!(a.rows[a.view[0]].company, "Overdue");
+        assert_eq!(a.stale_count(), 1);
     }
 
     #[test]
@@ -1229,6 +1321,7 @@ mod tests {
             vec![
                 "all",
                 "tracked",
+                "stale",
                 "dismissed",
                 "untouched",
                 "applied",

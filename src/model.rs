@@ -271,6 +271,14 @@ pub struct JobRow {
     pub channel: Option<Channel>,
     pub channel_source: Option<ChannelSource>,
 
+    /// When the CURRENT status was set, and when this posting first
+    /// entered your pipeline at all. Both come from `status_history`.
+    pub status_since: Option<String>,
+    pub first_tracked_at: Option<String>,
+    /// Every transition, oldest first, as `(status, timestamp)`. `None`
+    /// status means the mark was cleared.
+    pub status_timeline: Vec<(Option<String>, String)>,
+
     /// Technologies detected in the description by `tech.yaml`'s patterns.
     /// Derived on read, never stored — improving a pattern takes effect on
     /// the next run with no migration.
@@ -292,6 +300,36 @@ impl JobRow {
     /// Whether you entered this by hand rather than a fetcher finding it.
     pub fn is_manual(&self) -> bool {
         self.source == MANUAL_SOURCE
+    }
+
+    /// Whole days since the current status was set.
+    pub fn status_age_days(&self) -> Option<i64> {
+        days_since(self.status_since.as_deref()?)
+    }
+
+    /// Whole days since this posting first entered your pipeline.
+    pub fn tracked_age_days(&self) -> Option<i64> {
+        days_since(self.first_tracked_at.as_deref()?)
+    }
+
+    /// When this posting first reached a given status, if it ever did.
+    /// The FIRST occurrence, not the last: "applied 6 weeks ago" is the
+    /// number that matters even if you re-marked it since.
+    pub fn first_reached(&self, status: &str) -> Option<&str> {
+        self.status_timeline
+            .iter()
+            .find(|(s, _)| s.as_deref() == Some(status))
+            .map(|(_, at)| at.as_str())
+    }
+
+    /// A compact age for a narrow column: `0d`, `4d`, `3w`, `2mo`.
+    pub fn age_label(&self) -> Option<String> {
+        Some(compact_age(self.status_age_days()?))
+    }
+
+    /// The same age as prose, for the detail pane: "today", "4 days ago".
+    pub fn age_phrase(&self) -> Option<String> {
+        Some(phrase_age(self.status_age_days()?))
     }
 
     /// Whether this looks like a staffing-agency listing.
@@ -794,4 +832,97 @@ pub fn infer_channel(
         return Some(Channel::Agency);
     }
     None
+}
+
+/// Whole days between a stored timestamp and now.
+///
+/// SQLite writes `CURRENT_TIMESTAMP` as UTC `YYYY-MM-DD HH:MM:SS`, so
+/// that's what this parses. A timestamp it can't read yields `None`
+/// rather than 0 — an unparseable date must not read as "just now", which
+/// would quietly hide a stale row.
+pub fn days_since(timestamp: &str) -> Option<i64> {
+    let naive =
+        chrono::NaiveDateTime::parse_from_str(timestamp.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
+    let then = naive.and_utc();
+    Some((chrono::Utc::now() - then).num_days().max(0))
+}
+
+/// "today", "1 day ago", "12 days ago" — the readable form, for places
+/// with room for a sentence rather than a column.
+pub fn phrase_age(days: i64) -> String {
+    match days {
+        0 => "today".to_string(),
+        1 => "1 day ago".to_string(),
+        _ => format!("{days} days ago"),
+    }
+}
+
+/// `0d`, `4d`, `3w`, `2mo` — at most three characters at any realistic
+/// age, because this sits in a list column beside a status name. Day zero
+/// is `0d` rather than `today` so the column can't suddenly grow by two
+/// characters; prose sites spell out "today" themselves.
+pub fn compact_age(days: i64) -> String {
+    match days {
+        0..=13 => format!("{days}d"),
+        14..=59 => format!("{}w", days / 7),
+        _ => format!("{}mo", days / 30),
+    }
+}
+
+#[cfg(test)]
+mod age_tests {
+    use super::*;
+
+    /// The column this feeds is 13 characters wide and shares them with a
+    /// status name, so the age half must never exceed three.
+    #[test]
+    fn compact_age_stays_three_characters_at_any_realistic_age() {
+        assert_eq!(compact_age(0), "0d");
+        assert_eq!(compact_age(1), "1d");
+        assert_eq!(compact_age(13), "13d");
+        assert_eq!(compact_age(14), "2w");
+        assert_eq!(compact_age(59), "8w");
+        assert_eq!(compact_age(60), "2mo");
+        assert_eq!(compact_age(400), "13mo");
+        for days in 0..400 {
+            assert!(
+                compact_age(days).len() <= 4,
+                "{days} rendered as {}",
+                compact_age(days)
+            );
+        }
+    }
+
+    #[test]
+    fn phrase_age_reads_as_a_sentence() {
+        assert_eq!(phrase_age(0), "today");
+        assert_eq!(phrase_age(1), "1 day ago");
+        assert_eq!(phrase_age(9), "9 days ago");
+    }
+
+    /// An unreadable timestamp must not read as "just now": that would
+    /// silently hide a row that has in fact gone quiet.
+    #[test]
+    fn an_unparseable_timestamp_has_no_age_rather_than_a_zero_one() {
+        assert_eq!(days_since("not a date"), None);
+        assert_eq!(days_since(""), None);
+        assert_eq!(days_since("2025-01-02"), None);
+        assert!(days_since("2025-01-02 03:04:05").is_some());
+    }
+
+    #[test]
+    fn first_reached_returns_the_first_visit_not_the_last() {
+        let row = JobRow {
+            status_timeline: vec![
+                (Some("applied".into()), "2025-01-01 00:00:00".into()),
+                (Some("recruiter".into()), "2025-02-01 00:00:00".into()),
+                // Re-marked after a second conversation; the original
+                // application date is still the one that matters.
+                (Some("applied".into()), "2025-03-01 00:00:00".into()),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(row.first_reached("applied"), Some("2025-01-01 00:00:00"));
+        assert_eq!(row.first_reached("interview"), None);
+    }
 }

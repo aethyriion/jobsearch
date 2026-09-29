@@ -65,7 +65,12 @@ pub async fn run(paths: Paths, filters: Filters, tech: crate::tech::TechDetector
         .with_tech(tech)
         .with_agency_patterns(filters.agency_text.clone(), filters.agency_company.clone());
     let rows = store.all_candidates()?;
-    let mut app = App::new(rows, filters.startup.clone(), filters.seniority.clone());
+    let mut app = App::new(
+        rows,
+        filters.startup.clone(),
+        filters.seniority.clone(),
+        filters.staleness.clone(),
+    );
     app.status = format!(
         "{} jobs loaded · {} with a known stage · ? for help",
         app.rows.len(),

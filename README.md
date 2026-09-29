@@ -382,8 +382,9 @@ jobsearch add --company "..." --title "..." --channel referral
 
 ## Tracking where each application stands
 
-`m` cycles the status filter: **all → tracked → dismissed → untouched →
-applied → recruiter → interview → rejected → skipped → silence**.
+`m` cycles the status filter: **all → tracked → stale → dismissed →
+untouched → applied → recruiter → interview → rejected → skipped →
+silence**.
 `recruiter` is a recruiter screen — a distinct state worth tracking,
 because it means a human replied, which "applied" alone doesn't. `tracked` is the application
 list — everything you've acted on, whatever happened next.
@@ -402,6 +403,61 @@ the list would be useless.
 The header keeps a running tally (`4 applied · 2 interview`), so you can
 see where things stand without changing filters to count them.
 
+### How long it's been sitting
+
+The `mine · age` column carries both the status and how long it's held it:
+
+```
+mine · age
+applied 4d
+recruiter 2w
+interview 5w      ← red
+```
+
+Every status change is timestamped. Editing the notes is not a status
+change, so annotating a row doesn't reset its clock — a row you commented
+on this morning shouldn't read as freshly moved.
+
+The age turns red once it passes the threshold for that status, set in
+`filters.yaml`:
+
+```yaml
+staleness:
+  interview: 21
+  recruiter: 14
+  applied: 28
+```
+
+Terminal statuses (`rejected`, `skipped`, `silence`) have no threshold and
+never go stale — a closed door isn't waiting on anything. The defaults are
+deliberately generous: a fortnight of silence after a recruiter screen is
+normal, and three weeks after an onsite happens. They're the point at
+which it's worth a nudge, not proof of a no.
+
+`m` cycles to **stale** to see just those, the header shows a `3 stale`
+badge when there are any, and `S` sorts by **age**, longest wait first.
+Outside the TUI:
+
+```
+jobsearch stale                # everything past its threshold, oldest first
+jobsearch stale --all          # every tracked application with its age
+```
+
+The detail pane shows the whole path rather than just where it landed:
+
+```
+your status: interview  ·  set 5 days ago  ·  applied 41 days ago
+
+TIMELINE
+  2025-08-12  applied     7w
+  2025-09-18  recruiter   11d
+  2025-09-24  interview   5d
+```
+
+"Applied two months ago, interviewed last week" and "applied last week,
+interviewed yesterday" are different situations, and the current status
+alone can't tell them apart.
+
 ## Commands
 
 | Command | What it does |
@@ -415,6 +471,7 @@ see where things stand without changing filters to count them.
 | `jobsearch inspect [URL]` | Print a stored job in full, or with no URL list recent rejections and why each was dropped. |
 | `jobsearch channel` | Set or clear who is advertising a posting. |
 | `jobsearch tech` | What your candidates actually use, as a histogram. `--tag rust` lists the postings for one tag. |
+| `jobsearch stale` | Applications that have gone quiet — anything past its `staleness` threshold, oldest first. `--all` lists every tracked application with its age. |
 | `jobsearch dismiss` | Hide a posting (`--url`) or an employer (`--company`). Soft: `restore` undoes it, `dismissed` lists what's hidden. |
 | `jobsearch diagnose` | Where jobs die in the filter funnel, the daily intake rate, and which single config change reaches the most near-misses. Reads only what's stored; no network. |
 | `jobsearch check` | Validate every config file and report stage coverage. |
@@ -433,10 +490,11 @@ FILTER   s   startup mode on/off
          t   pick a technology (aws, gcp, rust, ...)   T  clear it
          L   level: the policy, then each rung, then unlabelled, then any
          f   AI verdict: all / apply / consider / skip / unscored
-         m   your status: all / tracked / dismissed / untouched /
-             applied / interview / rejected / skipped / silence
+         m   your status: all / tracked / stale / dismissed / untouched /
+             applied / recruiter / interview / rejected / skipped / silence
          /   search company, title and location
-         S   sort: score / company / title / stage / posted / status / level
+         S   sort: score / company / title / stage / posted / status /
+             level / age
          R   reverse sort
 
 TRIAGE   in pipeline order:
@@ -560,6 +618,7 @@ One SQLite file, `data/seen_jobs.sqlite3`:
 | `job_details` | The full record including JD text, keyed by URL. |
 | `ai_evaluations` | Scores and reasoning. |
 | `user_status` | Your `my_status` and notes. |
+| `status_history` | Append-only log of every status transition, which is where the age column and `jobsearch stale` get their numbers. A log rather than `applied_at`/`recruiter_at` columns because statuses are a vocabulary that grows — `recruiter` was added after the fact, and each new one would otherwise mean a migration. |
 | `company_stage` | Stage, headcount and provenance per company. |
 | `job_channel` | Hand-set agency/direct overrides. Only overrides — the guess is derived on read. |
 | `dismissed_jobs` / `dismissed_companies` | What you've hidden. Separate from the job rows, so hiding destroys nothing and restoring is lossless. |

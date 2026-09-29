@@ -41,6 +41,8 @@ pub struct Filters {
     pub agency_text: regex::RegexSet,
     /// Names matched against the company field only.
     pub agency_company: regex::RegexSet,
+    /// Days-in-status before a tracked application counts as stale.
+    pub staleness: std::collections::BTreeMap<String, i64>,
 }
 
 impl Filters {
@@ -64,6 +66,7 @@ impl Filters {
             seniority: SeniorityPolicy::from_config(&cfg.seniority)?,
             agency_text: compile_set(&cfg.agency_text_patterns, "agency_text_patterns")?,
             agency_company: compile_set(&cfg.agency_company_patterns, "agency_company_patterns")?,
+            staleness: cfg.staleness.clone(),
         })
     }
 
@@ -132,6 +135,23 @@ impl Filters {
         self.title_is_relevant(&job.title)
             && self.location_is_allowed(&job.location)
             && !self.jd_stack_mismatch(&job.description)
+    }
+
+    /// How many days past its threshold a tracked row is, or `None` if it
+    /// isn't stale.
+    ///
+    /// Only statuses with a configured threshold can go stale. `rejected`,
+    /// `skipped` and `silence` are terminal — there's nothing left to
+    /// chase, so flagging them would be noise.
+    pub fn staleness_days(&self, row: &JobRow) -> Option<i64> {
+        let status = row.my_status.as_deref()?;
+        let threshold = *self.staleness.get(status)?;
+        let age = row.status_age_days()?;
+        (age >= threshold).then_some(age - threshold)
+    }
+
+    pub fn is_stale(&self, row: &JobRow) -> bool {
+        self.staleness_days(row).is_some()
     }
 
     /// Which checks a job fails, for explaining a rejection. Empty means
@@ -429,6 +449,7 @@ mod tests {
             truncated_description_min_chars: 400,
             startup: StartupPolicyConfig::default(),
             seniority: SeniorityPolicyConfig::default(),
+            staleness: Default::default(),
             agency_text_patterns: vec![r"\bon behalf of our client\b".into()],
             agency_company_patterns: vec![r"\bmotion recruitment\b".into()],
         };
@@ -697,5 +718,41 @@ mod tests {
             ..p
         };
         assert!(lenient.admits(&row_with(None, None)));
+    }
+
+    /// The threshold is a floor, not a fence: a row exactly at it is
+    /// stale, because "14 days and nothing" is the day you follow up.
+    #[test]
+    fn staleness_counts_from_the_last_transition_and_only_for_configured_statuses() {
+        let mut f = test_filters();
+        f.staleness = [("recruiter".to_string(), 14), ("applied".to_string(), 28)]
+            .into_iter()
+            .collect();
+
+        let row = |status: &str, days_ago: i64| {
+            let at = chrono::Utc::now() - chrono::Duration::days(days_ago);
+            JobRow {
+                my_status: Some(status.to_string()),
+                status_since: Some(at.format("%Y-%m-%d %H:%M:%S").to_string()),
+                ..Default::default()
+            }
+        };
+
+        assert_eq!(f.staleness_days(&row("recruiter", 13)), None);
+        assert_eq!(f.staleness_days(&row("recruiter", 14)), Some(0));
+        assert_eq!(f.staleness_days(&row("recruiter", 20)), Some(6));
+        assert_eq!(f.staleness_days(&row("applied", 20)), None);
+
+        // Terminal statuses have no threshold, so they never go stale: a
+        // rejection isn't waiting on anything.
+        assert_eq!(f.staleness_days(&row("rejected", 400)), None);
+        assert_eq!(f.staleness_days(&row("silence", 400)), None);
+
+        // No timestamp at all reads as "age unknown", never as stale.
+        let untimed = JobRow {
+            my_status: Some("recruiter".into()),
+            ..Default::default()
+        };
+        assert!(!f.is_stale(&untimed));
     }
 }
