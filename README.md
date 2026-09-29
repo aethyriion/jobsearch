@@ -352,17 +352,47 @@ jobsearch dismissed                       # list everything hidden
 jobsearch restore --company "Motion Recruitment Partners, LLC"
 ```
 
+## Agency or direct
+
+Staffing agencies are a different process: you can't see the employer, the
+negotiation runs through a third party, and the same role turns up three
+times under different URLs. Every posting carries a channel —
+**direct / agency / referral / inbound** — shown as a one-character marker
+in the list (`A` `R` `I` `D`) and a banner in the detail pane.
+
+Agency listings are guessed from the posting, and anything you set by hand
+wins. Two separate pattern lists in `filters.yaml`, because *where* a
+pattern matches turns out to matter:
+
+| | |
+|---|---|
+| `agency_text_patterns` | Phrases in the description — "on behalf of our client", "contract-to-hire", "W2 contract". |
+| `agency_company_patterns` | Agency names, matched against the **company field only**. Matching a name against the body finds customer lists: a Dialpad posting naming *"brands including Randstad, Motorola, Netflix"* was labelled an agency. |
+
+The guess only ever produces `agency`, never `direct` — "this reads like an
+agency listing" is something the text can support; "this is a direct hire"
+is merely the absence of that evidence, and recording it as a positive
+would turn a non-observation into a fact. Set those by hand where it
+matters:
+
+```bash
+jobsearch channel --url "https://..." --set direct   # or clear with no --set
+jobsearch add --company "..." --title "..." --channel referral
+```
+
 ## Tracking where each application stands
 
-`m` cycles the status filter: **all → tracked → untouched → applied →
-interview → rejected → skipped → silence**. `tracked` is the application
+`m` cycles the status filter: **all → tracked → dismissed → untouched →
+applied → recruiter → interview → rejected → skipped → silence**.
+`recruiter` is a recruiter screen — a distinct state worth tracking,
+because it means a human replied, which "applied" alone doesn't. `tracked` is the application
 list — everything you've acted on, whatever happened next.
 
 `S` cycles the sort key, and `status` is one of them. It sorts by position
 in the pipeline rather than alphabetically:
 
 ```
-interview · applied · silence · rejected · skipped · untouched
+interview · recruiter · applied · silence · rejected · skipped · untouched
 ```
 
 Interview first because that's the one with a date attached; untouched
@@ -378,11 +408,12 @@ see where things stand without changing filters to count them.
 |---|---|
 | `jobsearch` / `jobsearch tui` | The review TUI. Fetch (`r`), score (`e`) and triage without leaving it. |
 | `jobsearch fetch` | Pull from every configured source, filter, dedup, store. Free. `--company <slug>` or `--aggregator <substring>` to run one source in isolation. |
-| `jobsearch evaluate` | Score unevaluated candidates with Claude. **The only step that costs money.** `--dry-run` to see the queue, `--limit N` to cap, `--all-stages` to score beyond startups. |
+| `jobsearch evaluate` | Score unevaluated candidates with Claude. **The only step that costs money.** `--url <URL>` scores exactly one, ignoring every queue policy and re-scoring one that already has a score. `--dry-run` to see the queue, `--limit N` to cap, `--all-stages` to score beyond startups. |
 | `jobsearch discover-yc` | Pull the YC directory, record stages, resolve ATS boards. |
 | `jobsearch refilter` | Re-apply the current `filters.yaml` to everything already stored, without re-fetching. Run it after editing filters. |
 | `jobsearch add` | Record an application by hand, for scripting. `--description-file -` reads the JD from stdin. The TUI's `a` key is the interactive version. |
 | `jobsearch inspect [URL]` | Print a stored job in full, or with no URL list recent rejections and why each was dropped. |
+| `jobsearch channel` | Set or clear who is advertising a posting. |
 | `jobsearch tech` | What your candidates actually use, as a histogram. `--tag rust` lists the postings for one tag. |
 | `jobsearch dismiss` | Hide a posting (`--url`) or an employer (`--company`). Soft: `restore` undoes it, `dismissed` lists what's hidden. |
 | `jobsearch diagnose` | Where jobs die in the filter funnel, the daily intake rate, and which single config change reaches the most near-misses. Reads only what's stored; no network. |
@@ -408,7 +439,9 @@ FILTER   s   startup mode on/off
          S   sort: score / company / title / stage / posted / status / level
          R   reverse sort
 
-TRIAGE   1 applied  2 interview  3 rejected  4 skipped  5 silence  0 clear
+TRIAGE   in pipeline order:
+         1 applied   2 recruiter  3 interview
+         4 rejected  5 skipped    6 silence   0 clear
          n   edit notes            o  open in browser
 
 HIDE     x   hide this posting (stays hidden across refreshes)
@@ -419,7 +452,10 @@ ENTRIES  a / i   add an application the scrapers never found
          c / E   edit the selected row
          dd / D  delete it (hand-entered rows only)
 
-RUN      r   fetch          e  score with Claude        F5  reload
+RUN      r   fetch
+         e   score JUST the selected row (a fraction of a cent)
+         E   score every unscored row in view — asks first
+         F5  reload
          ?   help           q  quit
 ```
 
@@ -525,6 +561,7 @@ One SQLite file, `data/seen_jobs.sqlite3`:
 | `ai_evaluations` | Scores and reasoning. |
 | `user_status` | Your `my_status` and notes. |
 | `company_stage` | Stage, headcount and provenance per company. |
+| `job_channel` | Hand-set agency/direct overrides. Only overrides — the guess is derived on read. |
 | `dismissed_jobs` / `dismissed_companies` | What you've hidden. Separate from the job rows, so hiding destroys nothing and restoring is lossless. |
 | `ats_resolution` | Which ATS board a company resolved to — including the misses, so re-runs don't re-probe. |
 
@@ -557,7 +594,7 @@ has no concept of company stage, so it can't do startup mode. See
 ## Development
 
 ```bash
-cargo test          # 120 unit tests, no network
+cargo test          # 126 unit tests, no network
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```

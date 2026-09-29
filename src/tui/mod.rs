@@ -58,7 +58,12 @@ enum TaskMessage {
 }
 
 pub async fn run(paths: Paths, filters: Filters, tech: crate::tech::TechDetector) -> Result<()> {
-    let store = Store::open(paths.db())?.with_tech(tech);
+    // Agency patterns come from the already-compiled filters rather than
+    // being re-read: forgetting them here is exactly how the foreground
+    // list ended up without channel markers while the CLI had them.
+    let store = Store::open(paths.db())?
+        .with_tech(tech)
+        .with_agency_patterns(filters.agency_text.clone(), filters.agency_company.clone());
     let rows = store.all_candidates()?;
     let mut app = App::new(rows, filters.startup.clone(), filters.seniority.clone());
     app.status = format!(
@@ -314,6 +319,19 @@ fn handle_key(
             }
             return Ok(());
         }
+        Mode::ConfirmEvaluateAll => {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    app.mode = Mode::Normal;
+                    spawn_evaluate(app, filters, paths, task_tx);
+                }
+                _ => {
+                    app.mode = Mode::Normal;
+                    app.status = "not scored".into();
+                }
+            }
+            return Ok(());
+        }
         Mode::ConfirmDismissJob => {
             match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => app.dismiss_selected_job(store)?,
@@ -396,7 +414,7 @@ fn handle_key(
         KeyCode::Char('o') | KeyCode::Enter => app.open_selected(),
 
         KeyCode::Char('0') => app.set_status(store, None)?,
-        KeyCode::Char(c @ '1'..='5') => {
+        KeyCode::Char(c @ '1'..='6') => {
             let index = c.to_digit(10).unwrap() as usize - 1;
             if let Some(status) = App::status_key(index) {
                 app.set_status(store, Some(status))?;
@@ -404,7 +422,8 @@ fn handle_key(
         }
 
         KeyCode::Char('a') | KeyCode::Char('i') => app.open_add_form(),
-        KeyCode::Char('c') | KeyCode::Char('E') => app.open_edit_form(),
+        // `c` only — `E` is now score-all. `c` is the vim verb anyway.
+        KeyCode::Char('c') => app.open_edit_form(),
         // `dd` to delete, the way it deletes a line everywhere else. `D`
         // stays as a single-key alias.
         KeyCode::Char('d') => {
@@ -426,7 +445,18 @@ fn handle_key(
         }
 
         KeyCode::Char('r') => spawn_fetch(app, filters, paths, task_tx),
-        KeyCode::Char('e') => spawn_evaluate(app, filters, paths, task_tx),
+        // `e` scores the row you're looking at — a single call, a fraction
+        // of a cent. `E` is the batch, and it asks first, because a
+        // one-keypress command that spends real money across hundreds of
+        // rows deserves a speed bump.
+        KeyCode::Char('e') => spawn_evaluate_one(app, paths, task_tx),
+        KeyCode::Char('E') => {
+            if app.unscored_in_scope() == 0 {
+                app.status = "nothing unscored in the current view".into();
+            } else {
+                app.mode = Mode::ConfirmEvaluateAll;
+            }
+        }
 
         _ => {}
     }
@@ -517,6 +547,64 @@ fn spawn_fetch(
             }),
         };
     });
+}
+
+/// Score just the selected row.
+fn spawn_evaluate_one(app: &mut App, paths: &Paths, task_tx: &mpsc::UnboundedSender<TaskMessage>) {
+    let Some(row) = app.selected_row().cloned() else {
+        return;
+    };
+    if !begin_task(app, "score") {
+        return;
+    }
+    app.task.total = 1;
+    app.task.detail = format!("{} — {}", row.company, row.title);
+    let paths = paths.clone();
+    let tx = task_tx.clone();
+
+    spawn_blocking_run(move || async move {
+        let result = async {
+            let store = open_store_for_task(&paths)?;
+            let filters = Filters::compile(&crate::config::load_filters(paths.filters())?)?;
+            let profile = crate::config::load_profile(paths.profile())?;
+            let evaluator =
+                crate::evaluate::Evaluator::new(&profile, crate::evaluate::model_from_env())?;
+            let eval = crate::pipeline::evaluate_one(&store, &filters, &evaluator, &row).await?;
+            crate::pipeline::write_scored_csv(&store, paths.scored_csv())?;
+            Ok::<_, anyhow::Error>(format!(
+                "{} {} — {}",
+                eval.match_score, eval.recommendation, row.title
+            ))
+        }
+        .await;
+
+        let _ = match result {
+            Ok(summary) => tx.send(TaskMessage::Finished {
+                label: "score".into(),
+                summary,
+            }),
+            Err(e) => tx.send(TaskMessage::Failed {
+                label: "score".into(),
+                error: format!("{e:#}"),
+            }),
+        };
+    });
+}
+
+/// A store for background tasks, with the same detectors the foreground
+/// one has. Factored out because three tasks were each rebuilding it, and
+/// one of them forgetting a detector is a silent difference in behaviour.
+fn open_store_for_task(paths: &Paths) -> Result<Store> {
+    let tech = crate::tech::TechDetector::load(paths.tech())
+        .unwrap_or_else(|_| crate::tech::TechDetector::empty());
+    let (text, company) = crate::config::load_filters(paths.filters())
+        .ok()
+        .and_then(|c| Filters::compile(&c).ok())
+        .map(|f| (f.agency_text.clone(), f.agency_company.clone()))
+        .unwrap_or_else(|| (regex::RegexSet::empty(), regex::RegexSet::empty()));
+    Ok(Store::open(paths.db())?
+        .with_tech(tech)
+        .with_agency_patterns(text, company))
 }
 
 fn spawn_evaluate(

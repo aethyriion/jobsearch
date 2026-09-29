@@ -249,6 +249,15 @@ pub struct FiltersConfig {
     pub startup: StartupPolicyConfig,
     #[serde(default)]
     pub seniority: SeniorityPolicyConfig,
+    /// Phrases in the posting TEXT that mark it as an agency listing.
+    #[serde(default)]
+    pub agency_text_patterns: Vec<String>,
+    /// Agency names, matched against the COMPANY FIELD only. Kept separate
+    /// because matching a company name against the body text hits customer
+    /// lists — "brands including Randstad, Motorola, Netflix" in a direct
+    /// posting is not an agency listing.
+    #[serde(default)]
+    pub agency_company_patterns: Vec<String>,
 }
 
 fn default_truncated_min() -> usize {

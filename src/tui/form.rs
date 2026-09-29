@@ -10,7 +10,7 @@
 //! Kept free of terminal I/O so the field mechanics are testable: `ui.rs`
 //! draws it, `mod.rs` feeds it key events.
 
-use crate::model::{Stage, MY_STATUS_VALUES};
+use crate::model::{Channel, Stage, MY_STATUS_VALUES};
 use crate::store::ManualEntry;
 
 /// What a field accepts. The distinction drives both rendering and key
@@ -33,6 +33,7 @@ pub enum FieldId {
     Posted,
     Stage,
     Headcount,
+    Channel,
     Status,
     Notes,
     Description,
@@ -47,7 +48,7 @@ pub struct FieldSpec {
 
 /// Field order is the order you'd fill them in from a job posting open in
 /// another window: who and what first, then where, then the paperwork.
-pub const FIELDS: [FieldSpec; 10] = [
+pub const FIELDS: [FieldSpec; 11] = [
     FieldSpec {
         id: FieldId::Company,
         label: "Company",
@@ -89,6 +90,12 @@ pub const FIELDS: [FieldSpec; 10] = [
         label: "Headcount",
         kind: FieldKind::Text,
         hint: "approx people",
+    },
+    FieldSpec {
+        id: FieldId::Channel,
+        label: "Channel",
+        kind: FieldKind::Choice,
+        hint: "direct / agency / referral / inbound",
     },
     FieldSpec {
         id: FieldId::Status,
@@ -140,7 +147,7 @@ pub enum FormAction {
 
 pub struct Form {
     /// Parallel to FIELDS.
-    values: [String; 10],
+    values: [String; 11],
     pub mode: FormMode,
     /// The `:` line being typed, without its leading colon.
     pub command: String,
@@ -165,8 +172,9 @@ impl Default for Form {
 
 impl Form {
     pub fn new() -> Self {
-        let mut values: [String; 10] = Default::default();
+        let mut values: [String; 11] = Default::default();
         values[index_of(FieldId::Stage)] = UNSET.to_string();
+        values[index_of(FieldId::Channel)] = UNSET.to_string();
         values[index_of(FieldId::Status)] = UNSET.to_string();
         Self {
             values,
@@ -196,6 +204,10 @@ impl Form {
         form.set(
             FieldId::Headcount,
             &row.headcount.map(|h| h.to_string()).unwrap_or_default(),
+        );
+        form.set(
+            FieldId::Channel,
+            row.channel.map(Channel::as_str).unwrap_or(UNSET),
         );
         form.set(FieldId::Status, row.my_status.as_deref().unwrap_or(UNSET));
         form.set(FieldId::Notes, row.notes.as_deref().unwrap_or(""));
@@ -445,6 +457,9 @@ impl Form {
             FieldId::Stage => std::iter::once(UNSET.to_string())
                 .chain(Stage::ALL.iter().map(|s| s.as_str().to_string()))
                 .collect(),
+            FieldId::Channel => std::iter::once(UNSET.to_string())
+                .chain(Channel::ALL.iter().map(|c| c.as_str().to_string()))
+                .collect(),
             FieldId::Status => std::iter::once(UNSET.to_string())
                 .chain(MY_STATUS_VALUES.iter().map(|s| s.to_string()))
                 .collect(),
@@ -514,6 +529,7 @@ impl Form {
             description: self.get(FieldId::Description).trim().to_string(),
             stage: choice(FieldId::Stage).and_then(|s| Stage::parse(&s)),
             headcount,
+            channel: choice(FieldId::Channel).and_then(|c| Channel::parse(&c)),
             my_status: choice(FieldId::Status),
             // Always Some so a cleared box actually clears the stored
             // note, rather than the blank meaning "don't touch it".
@@ -600,6 +616,17 @@ mod tests {
             f.to_entry().unwrap().url,
             "https://boards.greenhouse.io/acme/jobs/1"
         );
+    }
+
+    #[test]
+    fn the_channel_field_round_trips() {
+        let mut f = filled();
+        f.focus = index_of(FieldId::Channel);
+        assert_eq!(f.to_entry().unwrap().channel, None, "unset stays unset");
+        f.cycle(1);
+        assert_eq!(f.get(FieldId::Channel), "direct");
+        f.cycle(1);
+        assert_eq!(f.to_entry().unwrap().channel, Some(Channel::Agency));
     }
 
     #[test]

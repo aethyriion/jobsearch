@@ -214,6 +214,40 @@ fn ingest(store: &Store, filters: &Filters, jobs: Vec<Job>) -> Result<usize> {
     Ok(kept)
 }
 
+/// Score exactly one posting, ignoring every queue policy.
+///
+/// Separate from `run_evaluate` on purpose: that one is a batch over a
+/// filtered queue, and the filters exist to control spend. Scoring the row
+/// you're looking at is a deliberate single act — it should work even on a
+/// job that startup mode hides, and it should re-score one that already
+/// has a score, because "score this again with the JD I just pasted in" is
+/// the main reason to ask.
+pub async fn evaluate_one(
+    store: &Store,
+    filters: &Filters,
+    evaluator: &crate::evaluate::Evaluator,
+    row: &crate::model::JobRow,
+) -> Result<crate::model::Evaluation> {
+    let truncated = filters.looks_truncated(&row.description);
+    let eval = evaluator.evaluate(row, truncated).await?;
+    store.save_evaluation(&row.url, &eval, evaluator.model())?;
+    if let Some(stage) = eval.company_stage {
+        if eval.stage_confidence.unwrap_or(0) >= 50 {
+            store.upsert_company_stage(&CompanyStage {
+                company: row.company.clone(),
+                stage,
+                headcount: eval.company_headcount,
+                source: StageSource::Ai,
+                note: Some(format!(
+                    "inferred from JD (confidence {})",
+                    eval.stage_confidence.unwrap_or(0)
+                )),
+            })?;
+        }
+    }
+    Ok(eval)
+}
+
 /// Score every unevaluated candidate.
 ///
 /// `startup_only` gates the *queue*, not the display, because this is the
