@@ -2,7 +2,7 @@
 name = "job_search"
 version = "0.2.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.88"
 description = "Startup-focused job search pipeline and TUI"
 license = "MIT"
 readme = "README.md"

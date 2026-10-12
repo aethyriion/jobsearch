@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/aethyriion/jobsearch/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/aethyriion/jobsearch/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <img alt="Rust 1.82+" src="https://img.shields.io/badge/rust-1.82%2B-orange.svg">
+  <img alt="Rust 1.88+" src="https://img.shields.io/badge/rust-1.88%2B-orange.svg">
   <img alt="Single binary" src="https://img.shields.io/badge/deps-none-brightgreen.svg">
 </p>
 
@@ -65,7 +65,7 @@ with `sqlite3`.
 
 ## Quick start
 
-Requires **Rust 1.82 or newer** (see `rust-toolchain.toml`). Nothing else —
+Requires **Rust 1.88 or newer**. Nothing else —
 SQLite is compiled in, and TLS is rustls, so there's no system OpenSSL
 dependency either.
 
