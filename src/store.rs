@@ -18,8 +18,11 @@
 //! list. Query this table instead when you want to see why a job was kept
 //! or dropped, or to feed the JD to the AI step without re-fetching.
 //!
-//! This is the same file and the same schema the (now frozen) Next.js
-//! board in `web/` reads, so both UIs stay usable against one database.
+//! One file, one schema, and no migration step between the CLI and the
+//! TUI: they are the same binary reading the same tables. Anything else
+//! that wants this data — a script, a notebook, another UI — can open the
+//! file directly, which is why the schema is plain and the column names
+//! are meant to be read by a human.
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -250,8 +253,9 @@ impl Store {
         }
         let conn = Connection::open(path)
             .with_context(|| format!("opening database {}", path.display()))?;
-        // WAL lets the frozen web/ board read while a fetch run writes,
-        // instead of one blocking the other.
+        // WAL so a reader doesn't block the writer: a `fetch` run holds the
+        // write lock for a while, and the TUI stays responsive reading the
+        // same file in another process.
         let _: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
         conn.execute_batch(SCHEMA)?;
         migrate(&conn)?;

@@ -675,9 +675,9 @@ impl App {
     /// through to SQLite immediately.
     ///
     /// Writing on every keystroke rather than batching is deliberate: this
-    /// is the one piece of state in the app that the user authored, the
-    /// frozen web board reads the same table, and a TUI that loses your
-    /// triage because it crashed before a flush would be worse than useless.
+    /// is the one piece of state in the app that the user authored, and a
+    /// TUI that loses your triage because it crashed before a flush would be
+    /// worse than useless.
     pub fn set_status(&mut self, store: &Store, status: Option<&str>) -> Result<()> {
         let Some(row) = self.selected_row() else {
             return Ok(());

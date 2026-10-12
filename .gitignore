@@ -1,10 +1,11 @@
 /target/
 .DS_Store
 .env
-web/node_modules/
-web/.next/
-web/tsconfig.tsbuildinfo
 .idea/*
 data/test_*
 data/
 profile.yaml
+.venv/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm

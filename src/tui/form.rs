@@ -215,10 +215,10 @@ impl Form {
         // the text the model will actually see rather than as markup.
         //
         // Note this is lossy for a fetched row: saving writes the
-        // flattened text back over the stored HTML. Nothing in this binary
-        // reads that markup (both the scorer and the detail pane strip it
-        // anyway), and seeing exactly what the model sees is worth more
-        // than preserving tags for the frozen web board.
+        // flattened text back over the stored HTML. Nothing reads that
+        // markup (both the scorer and the detail pane strip it anyway), and
+        // seeing exactly what the model sees is worth more than preserving
+        // tags nothing renders.
         form.set(FieldId::Description, &flatten_description(&row.description));
         form.editing = Some(row.url.clone());
         form.dirty = false;

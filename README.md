@@ -572,7 +572,8 @@ RUN      r   fetch
 ```
 
 Status edits are written to SQLite on the keystroke, not batched — triage
-survives a crash, and the frozen web board sees it immediately.
+survives a crash, and anything else reading the database sees it
+immediately.
 
 ## "I'm not getting any new results"
 
@@ -679,7 +680,8 @@ One SQLite file, `data/seen_jobs.sqlite3`:
 | `ats_resolution` | Which ATS board a company resolved to — including the misses, so re-runs don't re-probe. |
 
 Hand-entered rows live in those same tables with `job_details.source =
-'manual'` — no separate table, so the frozen web board shows them too.
+'manual'` — no separate table, so every query and export includes them
+without special-casing.
 
 JD text deliberately stays out of the CSVs: a multi-KB job description in
 a spreadsheet cell defeats the point of the CSV being a quick scannable
@@ -698,16 +700,10 @@ and the HN thread cover the same ground through interfaces meant to be
 read by programs. If you want Wellfound coverage, their email job alerts
 into a mailbox you read yourself is the supported path.
 
-## The web board
-
-`web/` still works and reads the same database, but it is **frozen** — it
-has no concept of company stage, so it can't do startup mode. See
-[`web/README.md`](web/README.md).
-
 ## Development
 
 ```bash
-cargo test          # 126 unit tests, no network
+cargo test          # unit tests, no network
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
@@ -764,12 +760,31 @@ Then open the TUI when you want to triage.
   corroboration only — verify a new SmartRecruiters company with
   `jobsearch fetch --company <slug>` before trusting it.
 - No Workday support. Its job-search API is POST-based with a different
-  pagination shape, and several large Ohio employers (Nationwide, Cardinal
-  Health, Progressive, Hyland, CoverMyMeds) sit behind it — the Adzuna
-  Ohio query is what covers them for now.
-- A failing company board logs a warning and the run continues; the other
-  129 boards are still worth having.
+  pagination shape, and a lot of large non-tech employers sit behind it —
+  an Adzuna query scoped to your area is the practical way to cover them.
+- A failing company board logs a warning and the run continues; every
+  other board in `companies.yaml` is still worth having.
+
+## Credits
+
+Derived from [**job_search_tool**](https://github.com/fedorchenko-juli/job_search_tool)
+by Yuliia Fedorchenko, MIT licensed.
+
+That project is where this one starts: the Python fetch → filter → dedup →
+score pipeline, the SQLite schema, the `filters.yaml` / `companies.yaml` /
+`aggregators.yaml` config design, and the AI evaluation's field vocabulary
+(`genuine_gaps`, `transferable_strengths`, `risk_factors`) are all hers.
+This repository ports that pipeline to Rust and builds a terminal UI on top
+of it, adding startup-stage filtering, a seniority axis, reversible
+dismissal, deterministic tech-stack detection, agency-vs-direct detection,
+two-axis scoring (qualification separated from callback odds), and
+timestamped status history. `profile.example.yaml` and `profile.sample.yaml`
+are her work, unmodified.
+
+If you want the original Python pipeline or its Next.js review board, go to
+the upstream repository — both are still there, and the full upstream
+history is preserved in this repository's git log.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) — see the file for both copyright holders.

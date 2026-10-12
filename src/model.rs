@@ -417,8 +417,9 @@ impl JobRow {
 }
 
 /// `job_details.source` for a hand-entered row. Every fetcher writes its
-/// own name here, so this just claims one more value in that space — no
-/// extra column, and the frozen web board shows it without changes.
+/// own name here, so this just claims one more value in that space rather
+/// than adding a column or a table that every query would have to know
+/// about.
 pub const MANUAL_SOURCE: &str = "manual";
 
 /// The statuses you assign yourself, deliberately a different vocabulary
