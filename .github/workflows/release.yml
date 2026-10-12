@@ -114,9 +114,21 @@ jobs:
           done
           echo "archives are clean"
 
+      # Linux and Git Bash on Windows have sha256sum; macOS ships shasum
+      # and no sha256sum. Neither name exists everywhere, so pick at
+      # runtime rather than assuming. Both print "<hash>  <name>", which is
+      # what the formula and manifest steps cut on.
       - name: Checksum
         shell: bash
-        run: cd dist && for f in *; do shasum -a 256 "$f" > "$f.sha256"; done
+        run: |
+          set -euo pipefail
+          if command -v sha256sum >/dev/null 2>&1; then
+            sum() { sha256sum "$1"; }
+          else
+            sum() { shasum -a 256 "$1"; }
+          fi
+          cd dist && for f in *; do sum "$f" > "$f.sha256"; done
+          cat ./*.sha256
 
       - uses: actions/upload-artifact@v4
         with:
