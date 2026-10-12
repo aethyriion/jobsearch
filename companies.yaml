@@ -2,33 +2,32 @@
 # ats: one of "greenhouse" | "ashby" | "workable" | "lever" | "smartrecruiters"
 # slug: the identifier used in that ATS's public API URL
 #
-# Rebuilt 2026-09-25 for a remote-US platform/DevOps/infrastructure search.
-# The list that shipped with the repo was the original author's Alberta/
-# Canada target list; the Canada-only employers there have been dropped
-# (they'd be rejected by filters.yaml's US location patterns anyway) and
-# replaced with US/US-remote employers, weighted toward companies whose
-# product IS infrastructure — those post the platform, SRE and
-# infrastructure roles that match profile.yaml best. The original list is
-# still in git history if you want any of it back.
+# THIS IS A STARTING POINT, NOT A TARGET LIST. It ships weighted toward
+# companies whose product IS infrastructure, because those post the
+# platform, SRE and infrastructure roles this tool was built to find. If
+# you are searching for something else, replace it — `jobsearch
+# discover-yc` and the aggregator runs will rebuild it for you, and
+# `jobsearch fetch --company <slug>` tests a single board.
 #
-# EVERY slug below was verified against its ATS's public API on 2026-09-25
-# and returned at least one live posting. Slugs do rot (a board gets
-# renamed, a company switches ATS), so if one goes quiet, check it with:
-#     python -m app.main --company <slug>
+# Every slug here returned at least one live posting when it was added.
+# Slugs do rot — a board gets renamed, a company switches ATS — so if one
+# goes quiet, check it on its own:
+#     jobsearch fetch --company <slug>
 #
-# Note on Ohio-local employers: the big ones (Nationwide, Cardinal Health,
-# Progressive, Hyland, CoverMyMeds) run Workday or iCIMS, which this
-# pipeline has no fetcher for — they are not omitted by choice. The
-# "Adzuna (Ohio, software engineer)" aggregator entry is what covers them.
+# A note on coverage: many large non-tech employers run Workday or iCIMS,
+# which this pipeline has no fetcher for. They are missing by limitation,
+# not by choice. An Adzuna entry in aggregators.yaml scoped to your area is
+# the practical way to reach them.
 #
-# app/discover_companies.py appends newly-resolved companies to the bottom
-# of this file automatically after an aggregator run.
+# `jobsearch discover-yc` and the aggregator runs append newly-resolved
+# companies to the bottom of this file automatically, preserving these
+# comments.
 
 companies:
   # ------------------------------------------------------------------
   # Infrastructure, platform & developer tooling — the primary targets.
-  # Their engineering orgs are mostly the kind of work in profile.yaml's
-  # kubernetes_and_cloud_platform / infrastructure_as_code competencies.
+  # Companies whose product is itself infrastructure tend to post the
+  # platform, Kubernetes and IaC work this config is tuned for.
   # ------------------------------------------------------------------
   - name: Cloudflare
     ats: greenhouse
@@ -158,8 +157,8 @@ companies:
     slug: sysdig
 
   # ------------------------------------------------------------------
-  # AI / ML platforms — the closest match to the Hewmen AI data platform
-  # work (ai_platform_infrastructure in profile.yaml).
+  # AI / ML platforms — infrastructure roles behind model training and
+  # serving. Match these against profile.yaml's own competencies.
   # ------------------------------------------------------------------
   - name: Anthropic
     ats: greenhouse
@@ -422,14 +421,10 @@ companies:
     slug: resmed
 
   # ------------------------------------------------------------------
-  # Ohio / Midwest — on-site or hybrid within range of Columbus.
+  # Your metro — on-site or hybrid within commuting range. Add employers
+  # near you here; pair it with the local patterns in filters.yaml's
+  # `location_allow_patterns`.
   # ------------------------------------------------------------------
-  - name: Path Robotics (Columbus, OH)
-    ats: greenhouse
-    slug: pathrobotics
-  - name: Aktion Associates (Maumee, OH)
-    ats: workable
-    slug: aktion-associates
 
   # Auto-discovered 2026-09-25 via YC directory
   - name: "CircuitHub"
