@@ -9,21 +9,29 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Two toolchains on purpose. `stable` is what contributors actually run;
-  # the msrv job keeps Cargo.toml's `rust-version` honest. That claim had
-  # silently drifted once already — nothing enforced it, dependencies moved
-  # on, and it stayed in the manifest as a promise the tree could no longer
-  # keep. If this job fails, either raise rust-version or pin the dependency
-  # back; do not delete the job.
+  # Four legs, each earning its place.
+  #
+  # `stable` is what contributors run. The `msrv` leg keeps Cargo.toml's
+  # `rust-version` honest — that claim had silently drifted once already,
+  # because nothing enforced it and dependencies moved on. If msrv fails,
+  # either raise rust-version or pin the dependency back; do not delete it.
+  #
+  # macOS and Windows exist because this tree spent its whole life being
+  # built only on Linux, and we now publish binaries for all three. Both
+  # rusqlite (bundled SQLite) and ring compile C, so these must be native
+  # runners — cross-compiling from Linux is not worth the toolchain pain
+  # when GitHub gives public repos these for free.
   test:
     name: ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { toolchain: stable, name: stable }
-          - { toolchain: "1.88", name: "MSRV 1.88" }
+          - { os: ubuntu-latest,  toolchain: stable,  name: "linux / stable" }
+          - { os: ubuntu-latest,  toolchain: "1.88",  name: "linux / MSRV 1.88" }
+          - { os: macos-latest,   toolchain: stable,  name: "macos / stable" }
+          - { os: windows-latest, toolchain: stable,  name: "windows / stable" }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -32,7 +40,7 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.toolchain }}
+          key: ${{ matrix.os }}-${{ matrix.toolchain }}
 
       - name: Format
         run: cargo fmt --all --check
@@ -46,9 +54,20 @@ jobs:
         run: cargo build --release
 
       # The shipped config is part of the contract: a filters.yaml that
-      # doesn't compile, or a tech.yaml with a bad regex, is a broken clone
-      # for everybody, and no unit test covers the config files themselves.
-      - name: Validate shipped config
+      # doesn't compile, or a tech.yaml with a bad regex, is a broken
+      # install for everybody, and no unit test covers the YAML itself.
+      #
+      # Runs from a scratch directory on purpose. From the repo root it
+      # would find config via the working-directory rule and prove nothing;
+      # from elsewhere it exercises the path every packaged install takes —
+      # `init` writes the embedded defaults, then the tool must work with
+      # no YAML anywhere near it.
+      - name: Validate shipped config from a clean directory
+        shell: bash
         run: |
-          cp profile.example.yaml profile.yaml
-          ./target/release/jobsearch check
+          set -euo pipefail
+          BIN="$PWD/target/release/jobsearch"
+          [ -x "$BIN" ] || BIN="$PWD/target/release/jobsearch.exe"
+          mkdir -p "$RUNNER_TEMP/clean" && cd "$RUNNER_TEMP/clean"
+          "$BIN" init
+          "$BIN" check
