@@ -1,0 +1,287 @@
+name: Release
+
+# Fires when release-please publishes a release. Deliberately NOT on
+# pull_request: every job below can read repository secrets, and a
+# secret-bearing workflow must never be reachable from a fork.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build artifacts for (dry runs)"
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------- build
+  #
+  # Native runner per target. Both rusqlite (bundled SQLite) and ring
+  # compile C, so cross-compiling to Darwin or MSVC from Linux means
+  # sourcing three toolchains to save nothing — the runners are free.
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # musl has no C compiler on the runner by default, and bundled
+      # SQLite will not link without one.
+      - name: Install musl toolchain
+        if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # Archives are assembled from an explicit allowlist in a scratch
+      # directory. Never tar the working tree: this repo's gitignored
+      # files include a multi-gigabyte SQLite database and a .env holding
+      # live API credentials, and a careless `tar czf .` would ship both.
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.release.tag_name || inputs.tag }}"
+          NAME="jobsearch-${VERSION}-${{ matrix.target }}"
+          STAGE="$(mktemp -d)/$NAME"
+          mkdir -p "$STAGE"
+
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp "target/${{ matrix.target }}/release/jobsearch.exe" "$STAGE/"
+          else
+            cp "target/${{ matrix.target }}/release/jobsearch" "$STAGE/"
+          fi
+          cp README.md LICENSE "$STAGE/"
+
+          mkdir -p dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            (cd "$(dirname "$STAGE")" && 7z a -tzip "$NAME.zip" "$NAME" >/dev/null)
+            mv "$(dirname "$STAGE")/$NAME.zip" dist/
+          else
+            tar czf "dist/$NAME.tar.gz" -C "$(dirname "$STAGE")" "$NAME"
+          fi
+
+      # Belt and braces. If a credential or the database ever reaches an
+      # archive, fail loudly here rather than on the release page.
+      - name: Refuse to ship secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in dist/*; do
+            case "$f" in
+              *.zip) listing=$(7z l "$f") ;;
+              *)     listing=$(tar tzf "$f") ;;
+            esac
+            if printf '%s' "$listing" | grep -Ei 'seen_jobs|\.env|profile\.yaml|\.sqlite3|candidates\.csv'; then
+              echo "::error::$f contains a file that must never be published"
+              exit 1
+            fi
+          done
+          echo "archives are clean"
+
+      - name: Checksum
+        shell: bash
+        run: cd dist && for f in *; do shasum -a 256 "$f" > "$f.sha256"; done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  # -------------------------------------------------------------- publish
+  upload:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - id: meta
+        run: echo "version=${{ github.event.release.tag_name || inputs.tag }}" >> "$GITHUB_OUTPUT"
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+
+  crates-io:
+    needs: upload
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: dtolnay/rust-toolchain@stable
+      # A crates.io publish is irreversible — a version can be yanked but
+      # never replaced — so prove the package is well-formed first, and
+      # that the 2 MB of demo media really is excluded.
+      - name: Verify the package before publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo package --locked --list > /tmp/pkg-contents.txt
+          if grep -qE '^(docs/|\.github/)' /tmp/pkg-contents.txt; then
+            echo "::error::docs/ or .github/ leaked into the crate — check Cargo.toml's exclude"
+            grep -E '^(docs/|\.github/)' /tmp/pkg-contents.txt
+            exit 1
+          fi
+          echo "package contains $(wc -l < /tmp/pkg-contents.txt) files, no demo media"
+          cargo publish --locked --dry-run
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+  homebrew:
+    needs: upload
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Update the tap
+        env:
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+          VERSION: ${{ needs.upload.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${VERSION#v}"
+          sha() { cut -d' ' -f1 < "dist/jobsearch-${VERSION}-$1.tar.gz.sha256"; }
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/aethyriion/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cat > tap/Formula/jobsearch.rb <<RUBY
+          # Generated by the jobsearch release workflow. Do not edit by hand.
+          class Jobsearch < Formula
+            desc "Startup-focused job search pipeline and TUI"
+            homepage "https://github.com/aethyriion/jobsearch"
+            version "${V}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/aethyriion/jobsearch/releases/download/${VERSION}/jobsearch-${VERSION}-aarch64-apple-darwin.tar.gz"
+                sha256 "$(sha aarch64-apple-darwin)"
+              else
+                url "https://github.com/aethyriion/jobsearch/releases/download/${VERSION}/jobsearch-${VERSION}-x86_64-apple-darwin.tar.gz"
+                sha256 "$(sha x86_64-apple-darwin)"
+              end
+            end
+
+            on_linux do
+              url "https://github.com/aethyriion/jobsearch/releases/download/${VERSION}/jobsearch-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+              sha256 "$(sha x86_64-unknown-linux-gnu)"
+            end
+
+            def install
+              bin.install "jobsearch"
+            end
+
+            def caveats
+              "Run 'jobsearch init' once to write the default config."
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/jobsearch --version")
+            end
+          end
+          RUBY
+          cd tap
+          git config user.name "jobsearch release"
+          git config user.email "stephen@aethyriion.dev"
+          git add Formula/jobsearch.rb
+          git diff --staged --quiet || git commit -m "jobsearch ${VERSION}"
+          git push
+
+  scoop:
+    needs: upload
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Update the bucket
+        env:
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+          VERSION: ${{ needs.upload.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${VERSION#v}"
+          HASH=$(cut -d' ' -f1 < "dist/jobsearch-${VERSION}-x86_64-pc-windows-msvc.zip.sha256")
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/aethyriion/scoop-bucket.git" bucket
+          mkdir -p bucket/bucket
+          cat > bucket/bucket/jobsearch.json <<JSON
+          {
+              "version": "${V}",
+              "description": "Startup-focused job search pipeline and TUI",
+              "homepage": "https://github.com/aethyriion/jobsearch",
+              "license": "MIT",
+              "architecture": {
+                  "64bit": {
+                      "url": "https://github.com/aethyriion/jobsearch/releases/download/${VERSION}/jobsearch-${VERSION}-x86_64-pc-windows-msvc.zip",
+                      "hash": "${HASH}",
+                      "extract_dir": "jobsearch-${VERSION}-x86_64-pc-windows-msvc"
+                  }
+              },
+              "bin": "jobsearch.exe",
+              "notes": "Run 'jobsearch init' once to write the default config.",
+              "checkver": "github",
+              "autoupdate": {
+                  "architecture": {
+                      "64bit": {
+                          "url": "https://github.com/aethyriion/jobsearch/releases/download/v\$version/jobsearch-v\$version-x86_64-pc-windows-msvc.zip",
+                          "extract_dir": "jobsearch-v\$version-x86_64-pc-windows-msvc"
+                      }
+                  }
+              }
+          }
+          JSON
+          cd bucket
+          git config user.name "jobsearch release"
+          git config user.email "stephen@aethyriion.dev"
+          git add bucket/jobsearch.json
+          git diff --staged --quiet || git commit -m "jobsearch ${VERSION}"
+          git push
