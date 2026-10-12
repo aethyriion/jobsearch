@@ -5,6 +5,12 @@ edition = "2021"
 rust-version = "1.82"
 description = "Startup-focused job search pipeline and TUI"
 license = "MIT"
+readme = "README.md"
+# TODO before first push: point these at the published repository.
+repository = "https://github.com/USER/REPO"
+homepage = "https://github.com/USER/REPO"
+keywords = ["job-search", "tui", "cli", "ratatui", "sqlite"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "jobsearch"
