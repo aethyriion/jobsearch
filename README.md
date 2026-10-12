@@ -32,21 +32,44 @@ j/k move · tab pane · s startup · / search · f ai · m mine · 1-5 status ·
 
 ## Quick start
 
-```bash
-cargo build --release          # or: make build
-cp .env.example .env           # fill in what you need — see the comments
-cp profile.example.yaml profile.yaml   # then write your real experience into it
+Requires **Rust 1.82 or newer** (see `rust-toolchain.toml`). Nothing else —
+SQLite is compiled in, and TLS is rustls, so there's no system OpenSSL
+dependency either.
 
+```bash
+git clone https://github.com/USER/REPO.git
+cd REPO
+cargo build --release          # or: make build
+
+cp .env.example .env                   # fill in what you need — see the comments
+cp profile.example.yaml profile.yaml   # then write your real experience into it
+```
+
+**Now edit `filters.yaml` before your first fetch.** As shipped,
+`location_allow_patterns` accepts US and US-inclusive remote roles and
+nothing else. If you're searching anywhere else, or you want on-site roles
+near you, that list is the one thing you must change — leaving it alone is
+by far the most common reason a first run returns nothing. The file's
+header tells you what to edit; [Configuration](#configuration) has the
+detail.
+
+```bash
 ./target/release/jobsearch check       # validate every config file
+./target/release/jobsearch discover-yc # learn company stages (free) — see below
 ./target/release/jobsearch fetch       # pull jobs (free)
 ./target/release/jobsearch             # open the TUI
 ```
 
+`discover-yc` is in that list deliberately: **startup mode is on by
+default, and a fresh clone knows no company stages at all**, so without it
+the headline feature has nothing to filter on and `companies.yaml` ships
+with a stage for only 16 of its entries. It needs no credentials.
+
+Scoring with Claude is a separate, optional step — `jobsearch evaluate` —
+and it is the only thing here that costs money. Everything above is free.
+
 `make install` puts `jobsearch` on your `PATH`. It reads its config from
 the working directory, so run it from this repo or pass `--root`.
-
-Nothing but `cargo` is required — SQLite is compiled in, and TLS is
-rustls, so there's no system OpenSSL dependency either.
 
 ## How it works
 
