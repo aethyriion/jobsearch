@@ -745,7 +745,7 @@ fn detail_lines(row: &JobRow, stale_days: Option<i64>) -> Vec<Line<'static>> {
                 }
                 category = tag.category.clone();
                 line.push(Span::styled(
-                    format!("{:<14}", category),
+                    format!("{category:<14}"),
                     Style::default().fg(Color::DarkGray),
                 ));
             }

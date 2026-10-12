@@ -1,6 +1,0 @@
-# Pinned to match Cargo.toml's `rust-version`. Anything newer works; this
-# just means `cargo` picks a toolchain that definitely compiles the crate
-# instead of failing on whatever happens to be installed.
-[toolchain]
-channel = "1.82"
-components = ["clippy", "rustfmt"]

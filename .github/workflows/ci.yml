@@ -9,31 +9,45 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
+  # Two toolchains on purpose. `stable` is what contributors actually run;
+  # the msrv job keeps Cargo.toml's `rust-version` honest. That claim had
+  # silently drifted once already — nothing enforced it, dependencies moved
+  # on, and it stayed in the manifest as a promise the tree could no longer
+  # keep. If this job fails, either raise rust-version or pin the dependency
+  # back; do not delete the job.
+  test:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { toolchain: stable, name: stable }
+          - { toolchain: "1.88", name: "MSRV 1.88" }
     steps:
       - uses: actions/checkout@v4
-      # rust-toolchain.toml pins the channel and the components, so there is
-      # nothing to configure here — the action reads it.
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ matrix.toolchain }}
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.toolchain }}
 
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
       # No test touches the network, so CI needs no credentials and no
-      # services. If a test ever does, it belongs behind a feature flag.
+      # services. If one ever does, it belongs behind a feature flag.
       - name: Test
         run: cargo test --all
       - name: Build release
         run: cargo build --release
 
-      # The configs are part of the contract: a shipped filters.yaml that
+      # The shipped config is part of the contract: a filters.yaml that
       # doesn't compile, or a tech.yaml with a bad regex, is a broken clone
-      # for everybody. `check` validates all of them without a database.
+      # for everybody, and no unit test covers the config files themselves.
       - name: Validate shipped config
         run: |
           cp profile.example.yaml profile.yaml

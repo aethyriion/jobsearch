@@ -1276,7 +1276,7 @@ mod tests {
         for filter in [MyFilter::All, MyFilter::Tracked, MyFilter::Applied] {
             a.my_filter = filter;
             a.recompute();
-            assert_eq!(a.view.len(), 1, "{:?} must not show dismissed rows", filter);
+            assert_eq!(a.view.len(), 1, "{filter:?} must not show dismissed rows");
             assert_eq!(a.rows[a.view[0]].company, "Visible");
         }
 
