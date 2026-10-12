@@ -1,34 +1,67 @@
-# jobsearch
+<h1 align="center">jobsearch</h1>
 
-A startup-focused job search, as a single Rust binary with a TUI.
+<p align="center">
+  <strong>A startup-focused job search that lives in your terminal.</strong><br>
+  Pulls roles straight from company ATS APIs, filters them against rules you own,<br>
+  scores the fit, and gives you one keyboard-driven board to work from.
+</p>
 
-It pulls open roles straight from companies' ATS APIs and from job
-aggregators, drops anything irrelevant, deduplicates against everything
-it has ever seen, optionally scores each candidate's fit against your own
-experience with Claude, and gives you a terminal UI to triage the result.
+<p align="center">
+  <a href="https://github.com/aethyriion/jobsearch/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/aethyriion/jobsearch/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <img alt="Rust 1.82+" src="https://img.shields.io/badge/rust-1.82%2B-orange.svg">
+  <img alt="Single binary" src="https://img.shields.io/badge/deps-none-brightgreen.svg">
+</p>
 
-Two things distinguish it from a job board:
+<p align="center">
+  <img src="docs/demo.gif" alt="jobsearch TUI: browsing scored roles, toggling startup mode, sorting by callback odds, and marking one applied" width="100%">
+</p>
 
-- **It knows what stage each company is at.** Startup mode is on by
-  default and is one keypress away from off. It's a *view*, not a fetch
-  setting — everything is always stored, so changing the cutoff is
-  instant and never needs a re-fetch.
-- **Nothing leaves your machine** except requests to the job sources you
-  configure and, for the optional AI step, the Anthropic API. Scraped
-  jobs, scores and your own notes all live in one local SQLite file.
+## Why this exists
 
-```
- jobsearch  647 shown / 702 total · 647 startup · 19 unscored  STARTUP <= series-c, <= 600 people
-┌ jobs ──────────────────────────────────────────────┐┌ detail ──────────────────────────────────┐
-│scr company           title                stg  rec ││Backend Engineer, Control Plane           │
-│ 88 Render            Software Engineer,…  ?    apply││Tailscale                                 │
-│ 82 Tailscale         Backend Engineer,…   ?    apply││Remote (US) · series-b · ~60 people (yc)  │
-│ 82 Depot             Staff Software Eng…  seed apply││                                          │
-│ 78 Temporal          Software Engineer,…  B    apply││82/100  APPLY                             │
-│  – Duets Network     Founding Engineer    ?    –    ││STRENGTHS …                               │
-└────────────────────────────────────────────────────┘└──────────────────────────────────────────┘
-j/k move · tab pane · s startup · / search · f ai · m mine · 1-5 status · o open · r fetch · e eval
-```
+Job boards show you everything and remember nothing. You search the same
+terms every morning, re-read the same postings, and lose track of which of
+the forty things you applied to ever answered.
+
+This inverts that. It fetches once, remembers forever, and makes the board
+a thing you *triage* rather than a thing you *search*. Four ideas do most
+of the work:
+
+**It knows what stage each company is at.** Startup mode ships on and is
+one keypress from off. Crucially it's a **view, not a fetch setting** —
+everything fetched is always stored, so widening the cutoff is instant and
+never needs a re-fetch. Change your mind at 11pm and the whole history
+re-filters in milliseconds.
+
+**It scores two different questions.** "Do I clear the bar this posting
+sets?" and "will a human ever see my application?" fail in opposite
+directions, and one number can't tell you which kind of bad news you're
+looking at. They're separate axes, and the split is what makes a low score
+actionable — see [Two scores, not one](#two-scores-not-one).
+
+**It tracks what happens next.** Every status change is timestamped, so
+the board tells you an interview has been silent for three weeks and it's
+time to chase or let go. No spreadsheet.
+
+**Nothing leaves your machine.** Requests go to the job sources you
+configure and, for the optional AI step, to the Anthropic API. Postings,
+scores and your private notes live in one local SQLite file you can query
+with `sqlite3`.
+
+<p align="center">
+  <img src="docs/screenshot.png" alt="The jobs list beside the detail pane, showing score, stage, stack, callback odds and status age" width="100%">
+</p>
+
+> The demo above runs on fictional companies. Your real board is whatever
+> `companies.yaml` and `aggregators.yaml` point at.
+
+## Contents
+
+**Getting started** — [Quick start](#quick-start) · [How it works](#how-it-works) · [Configuration](#configuration) · [Not getting results?](#im-not-getting-any-new-results)
+
+**The features** — [Startup mode](#startup-mode) · [Seniority](#seniority) · [Two scores](#two-scores-not-one) · [Status tracking](#tracking-where-each-application-stands) · [Tech stack detection](#tech-stack) · [Hiding noise](#hiding-noise) · [Agency or direct](#agency-or-direct) · [Manual entries](#applications-the-scrapers-never-found)
+
+**Reference** — [Commands](#commands) · [TUI keys](#tui-keys) · [What's stored](#whats-stored) · [Development](#development) · [Credits](#credits)
 
 ## Quick start
 
@@ -37,7 +70,7 @@ SQLite is compiled in, and TLS is rustls, so there's no system OpenSSL
 dependency either.
 
 ```bash
-git clone https://github.com/USER/REPO.git
+git clone https://github.com/aethyriion/jobsearch.git
 cd REPO
 cargo build --release          # or: make build
 
@@ -739,6 +772,23 @@ semantics, the seniority title reader and its policy, dismissal
 persistence across refilter and scoring, the tech detector's
 false-positive guards, and the TUI's filter/sort/selection logic. None of them touch
 the network.
+
+### Regenerating the demo GIF
+
+The README's GIF and screenshot are generated, not hand-captured, so they
+can't drift from the real UI:
+
+```bash
+./docs/demo-data.sh      # builds a throwaway DB of fictional companies
+vhs docs/demo.tape       # records docs/demo.gif + docs/screenshot.png
+```
+
+`docs/demo.tape` is a [VHS](https://github.com/charmbracelet/vhs) script of
+literal keystrokes, so the recording is deterministic and anyone can
+reproduce it. Re-run both after changing the TUI's layout or keymap — a
+stale GIF is worse than no GIF. The demo database is fictional by design:
+a fabricated score next to a real employer's name would read as a real
+assessment of that company.
 
 ### Layout
 

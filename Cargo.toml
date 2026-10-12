@@ -6,9 +6,8 @@ rust-version = "1.82"
 description = "Startup-focused job search pipeline and TUI"
 license = "MIT"
 readme = "README.md"
-# TODO before first push: point these at the published repository.
-repository = "https://github.com/USER/REPO"
-homepage = "https://github.com/USER/REPO"
+repository = "https://github.com/aethyriion/jobsearch"
+homepage = "https://github.com/aethyriion/jobsearch"
 keywords = ["job-search", "tui", "cli", "ratatui", "sqlite"]
 categories = ["command-line-utilities"]
 

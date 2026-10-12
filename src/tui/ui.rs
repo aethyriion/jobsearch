@@ -361,12 +361,16 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
         })
         .collect();
 
+    // Company and title share the leftover space 2:3 rather than company
+    // taking a fixed percentage. With nine fixed-width columns either side
+    // of them, a percentage left the title with about eight characters —
+    // enough to show "Staff SR" and not which role it was.
     let widths = [
         Constraint::Length(3),
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Percentage(22),
-        Constraint::Fill(1),
+        Constraint::Fill(2),
+        Constraint::Fill(3),
         Constraint::Length(3),
         Constraint::Length(4),
         Constraint::Length(14),
