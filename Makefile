@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := tui
-.PHONY: tui build release install fetch evaluate refilter discover check test fmt clippy web
+.PHONY: tui build release install fetch evaluate refilter discover check test fmt clippy
 
 CARGO ?= cargo
 BIN   := ./target/release/jobsearch
@@ -53,8 +53,3 @@ fmt:
 
 clippy:
 	$(CARGO) clippy --all-targets -- -D warnings
-
-# The Next.js board is frozen — still works against the same database, but
-# new features land in the TUI only. See web/README.md.
-web:
-	DB_PATH=$(CURDIR)/data/seen_jobs.sqlite3 npm --prefix web run dev
