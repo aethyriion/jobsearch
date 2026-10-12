@@ -1,12 +1,16 @@
-# Deterministic pre-filter rules, read by app/filters.py. Edit these lists
-# directly as you refine what "in scope" means for you — no code changes
-# needed. See app/filters.py's module docstring for how they're applied.
+# Deterministic pre-filter rules. Edit these lists directly as you refine
+# what "in scope" means for you — no code changes needed. See src/filters.rs's
+# module docstring for how they're applied.
 #
-# Configured 2026-09-25 for Stephen Rhodes' search: senior/staff platform,
-# DevOps/SRE, infrastructure and backend roles; remote US-first, Ohio
-# on-site/hybrid, relocation within the US open. Stack from
-# aethyriion.dev/content/skills.toml (Kubernetes/AWS/Terraform/Nix,
-# Rust/Go/TypeScript/Python).
+# This file ships configured for a US-remote platform / DevOps / SRE /
+# infrastructure search, because that is a concrete worked example and a
+# vague one would teach you nothing. It is a STARTING POINT, not a
+# recommendation: the titles, the stack and above all the locations are the
+# three things you should expect to change before your first real run.
+#
+# The single most common first-run problem is `location_allow_patterns`
+# below. It is US-centric as shipped. If you are not searching in the US,
+# nothing will match and your board will be empty.
 
 # Checked FIRST, before everything else, and word-boundary matched: a title
 # matching one of these is dropped even if it also matches
@@ -17,8 +21,8 @@
 # (optional; an empty list means no hard exclusions.)
 hard_exclusion_keywords:
   # LEVEL vetoes used to live here (intern, junior, entry level, new grad,
-  # ...). They were moved out on 2026-09-25 and replaced by the `seniority:`
-  # policy at the bottom of this file, because a keyword veto here is a
+  # ...). They were moved out and replaced by the `seniority:` policy at
+  # the bottom of this file, because a keyword veto here is a
   # FETCH-time decision: it marks the job as failed and it never appears
   # again, so changing your mind means a re-fetch. The seniority policy is a
   # view filter instead — everything is stored, and widening or narrowing
@@ -26,7 +30,7 @@ hard_exclusion_keywords:
   #
   # What remains here is the wrong TRACK, not the wrong level — IC/IC-lead, not people management. Delete these to see
   # management roles too. "director"/"vp"/"head of" are deliberately broad:
-  # a live Sysdig run surfaced "Director of Security Engineering", which the
+  # a real run surfaced "Director of Security Engineering", which the
   # narrower "director of engineering" missed.
   - "engineering manager"
   - "director"
@@ -160,8 +164,12 @@ exclusion_keywords:
 # Locations to keep, as regex patterns (case-insensitive) matched against
 # the free-text location string each ATS/aggregator returns.
 #
-# Configured for a remote-US search out of Ohio. Three things this has to
-# get right, all learned from live runs on 2026-09-25:
+# EDIT THIS FIRST. As shipped these patterns accept US and US-inclusive
+# remote roles and nothing else — if you are searching anywhere other than
+# the US, replace them or you will match nothing at all.
+#
+# Three things this has to get right, all learned the hard way from live
+# runs. Keep them in mind when you rewrite the list for your own region:
 #
 #  1. A bare "Remote" with no country qualifier is NOT allowed — plenty of
 #     postings say "Remote Poland"/"Remote Spain"/"Remote Australia".
@@ -172,15 +180,15 @@ exclusion_keywords:
 #     the ATS. So a US signal counts when it's at the START of the string
 #     ("United States (Remote)", "USA, Canada, Mexico") or paired with a
 #     remote word anywhere in it.
-#  3. "Remote" is not the only remote word: Sysdig says "Flexible - USA",
-#     others say "Distributed", "Home-based" or "Telecommute". Hence the
+#  3. "Remote" is not the only remote word. Real postings say "Flexible -
+#     USA", "Distributed", "Home-based" and "Telecommute". Hence the
 #     alternation below — keep the two paired patterns in sync if you edit it.
 location_allow_patterns:
   # --- US / US-inclusive remote --------------------------------------
   - '^\s*(?:united states|usa|u\.s\.|us)\b'   # "United States (Remote)", "USA | Remote", "USA, Canada"
   # remote-word BEFORE the US signal: "Remote - US", "Flexible - USA", "Remote (US, Canada)"
   - '\b(?:remote|flexible|distributed|home[\s-]?based|telecommut\w*|virtual|work from home|wfh|hybrid)\b.*\b(?:united states|usa|us|u\.s\.)'
-  # ...and AFTER it: "US Remote", "US-Remote", "Ohio, United States - Hybrid"
+  # ...and AFTER it: "US Remote", "US-Remote", "Texas, United States - Hybrid"
   - '\b(?:united states|usa|us)\b.*\b(?:remote|flexible|distributed|home[\s-]?based|telecommut\w*|virtual|work from home|wfh|hybrid)\b'
   - '\bu\.s\..*\b(?:remote|flexible|distributed|telecommut\w*|virtual|hybrid)\b'
   - '\bus(?:a)?[\s-]*only\b'                  # Remotive: "USA Only"
@@ -189,20 +197,22 @@ location_allow_patterns:
   - '\bworldwide\b'
   - '\banywhere\b'
   - '\bglobal(?:ly)?\b'
-  # --- Ohio: on-site / hybrid within commuting range -----------------
-  - '\bohio\b'
-  - ',\s*oh\b'              # "Columbus, OH"
-  - '\bcolumbus\b'
-  - '\bcincinnati\b'
-  - '\bcleveland\b'
-  - '\bdayton\b'
-  - '\bakron\b'
-  - '\btoledo\b'
-  # --- Relocation-eligible US on-site (uncomment to widen the search) -
-  # Relocation within the US is open per profile.yaml, but switching these on
-  # adds a LOT of volume — one live Arista Networks run went from 3 to 84
-  # candidates, nearly all on-site roles in CA/NH — and every extra candidate
-  # costs an AI-evaluation call. Uncomment when you want to see them.
+  # --- YOUR metro: on-site / hybrid within commuting range -----------
+  # Add your own state/province and the cities within range of you. Match
+  # both the spelled-out and abbreviated forms — postings use both, and
+  # which one you get depends on the ATS. Substitute your own:
+  #
+  # - '\b<state or province>\b'      # e.g. '\bcolorado\b'
+  # - ',\s*<xx>\b'                   # the abbreviation: "Boulder, CO"
+  # - '\b<city>\b'                   # one line per city in range
+  # - '\b<nearby city>\b'
+  #
+  # --- Relocation-eligible on-site (uncomment to widen the search) ----
+  # If you would relocate, switching these on finds roles the patterns
+  # above miss. Be aware it adds a LOT of volume — one real run went from 3
+  # to 84 candidates, nearly all on-site in states nowhere near the
+  # searcher — and every extra candidate that passes costs an
+  # AI-evaluation call. Uncomment when you actually want to see them.
   # - ',\s*us$'                                 # SmartRecruiters' "Nashua, NH, us"
   # - ',\s*(?:ca|ny|wa|tx|ma|co|il|ga|nc|pa|va|md|fl|az|ut|or|tn|mi|mn|wi|in|mo|nj|nh)\b'
   # - '\b(?:san francisco|new york|seattle|austin|boston|denver|chicago|atlanta|pittsburgh)\b'
@@ -214,15 +224,15 @@ location_allow_patterns:
 #
 # Because stack_core includes the platform tooling (Kubernetes, Terraform,
 # AWS, Docker, CI), this list only really fires on pure application-dev
-# roles in a stack that isn't a target — which is the intent. Java and C++
-# are listed even though they're on the résumé: both are shipped but dated,
-# and a Java-shop or C++-shop role isn't the target (see profile.yaml's
-# constraints).
+# roles in a stack that isn't a target — which is the intent. Note that a
+# language can belong here even if you have shipped it: the question this
+# list answers is "is this the work I want next", not "could I do it". Keep
+# it consistent with what profile.yaml's `constraints` say you are avoiding.
 stack_dealbreakers:
   # NOTE on trailing \b after a punctuation character: '#' and '+' are not
   # word characters, so '\bc#\b' requires a word character immediately
   # after the '#' and therefore never matches "C# developer" or "We use
-  # C#." — it matched nothing at all until 2026-09-25. Leading \b is fine
+  # C#." — it silently matched nothing at all. Leading \b is fine
   # (space->c IS a boundary); just don't put one on the trailing side.
   - '\bc#'
   - '\.net\b'
@@ -254,8 +264,8 @@ stack_dealbreakers:
 
 # Your own core stack — if the JD mentions any of these, a stack dealbreaker
 # match above is ignored (the role likely uses both, or the dealbreaker
-# keyword is a false positive). Mirrors content/skills.toml's daily/shipped
-# tiers, plus the platform tooling that defines the target roles.
+# keyword is a false positive). List what you actually work in day to day,
+# plus the platform tooling that defines the roles you are targeting.
 stack_core:
   # languages
   - '\brust\b'
@@ -305,7 +315,7 @@ stack_core:
   - '\bredis\b'
 
 # Below this many characters, a JD is treated as a short aggregator teaser
-# snippet rather than a full posting (see app/filters.py's looks_truncated).
+# snippet rather than a full posting (see `looks_truncated` in src/filters.rs).
 truncated_description_min_chars: 400
 
 # ---------------------------------------------------------------------------
@@ -362,10 +372,11 @@ startup:
 # "Member of Technical Staff" is a flat title several AI labs use at every
 # level, so its "staff" is deliberately NOT read as staff-level.
 seniority:
-  # Lowest rung to include, inclusive. Widened from senior to junior on
-  # 2026-09-25: senior-at-a-startup work often maps to a mid or junior
-  # posting at a larger company, and the AI scoring step is a better judge
-  # of whether a specific role is a step down than a title keyword is.
+  # Lowest rung to include, inclusive. Ships wide on purpose:
+  # senior-at-a-startup work often maps to a mid or even junior posting at a
+  # larger company, titles are not comparable between companies, and the AI
+  # scoring step is a better judge of whether a specific role is a step down
+  # than a title keyword is.
   min: junior
 
   # Highest rung to include, inclusive. `staff` keeps principal/lead IC
@@ -397,8 +408,10 @@ seniority:
 #
 # A manual value always wins over anything matched here.
 # Matched against the POSTING TEXT. Phrases only — a company name here
-# would hit customer lists ("brands including Randstad, Motorola, Netflix"
-# in a Dialpad posting matched `randstad` and mislabelled it an agency).
+# would hit customer lists — a real posting reading "brands including
+# Randstad, Motorola, Netflix" matched `randstad` and was mislabelled an
+# agency, which is why agency NAMES are matched against the company field
+# only, further down.
 #
 # These have to be narrow. Two that were tried and removed, with the hit
 # counts that condemned them:

@@ -60,7 +60,7 @@ rustls, so there's no system OpenSSL dependency either.
    | Y Combinator | `jobsearch discover-yc` | ~1,500 YC companies currently hiring, each with a stage and a headcount. |
 
    Company boards are fetched concurrently (8 at a time by default), so a
-   run over ~130 boards takes seconds rather than minutes.
+   run over the whole of companies.yaml takes seconds rather than minutes.
 
 2. **Filter** (`filters.yaml`) — drops anything that isn't an
    engineering-shaped title, isn't in an allowed location, or whose JD
@@ -779,7 +779,8 @@ of it, adding startup-stage filtering, a seniority axis, reversible
 dismissal, deterministic tech-stack detection, agency-vs-direct detection,
 two-axis scoring (qualification separated from callback odds), and
 timestamped status history. `profile.example.yaml` and `profile.sample.yaml`
-are her work, unmodified.
+are substantially her work, with only their references to the old Python
+module names updated.
 
 If you want the original Python pipeline or its Next.js review board, go to
 the upstream repository — both are still there, and the full upstream

@@ -41,8 +41,8 @@ pub struct Company {
 impl Company {
     /// Parsed form of the `stage:` field, or None if unset/unparseable.
     /// An unparseable value is treated as absent rather than as an error:
-    /// a typo in one of 129 entries shouldn't fail the whole run, and
-    /// `config check` reports them separately.
+    /// one typo in a long companies.yaml shouldn't fail the whole run, and
+    /// `jobsearch check` reports them separately.
     pub fn parsed_stage(&self) -> Option<Stage> {
         self.stage.as_deref().and_then(Stage::parse)
     }

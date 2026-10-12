@@ -117,7 +117,8 @@ from the company's name alone.";
 /// tool JSON in declaration order, and with `max_tokens` capped, a run of
 /// long free-text fields can exhaust the budget before later fields are
 /// written — which caused a real missing-`recommendation` failure in the
-/// Python version this ports. Putting the two short, decision-critical
+/// upstream Python implementation this ports (see the README's Credits).
+/// Putting the two short, decision-critical
 /// fields first means they are very unlikely to be the ones lost to
 /// truncation even if a long-text field still gets cut off.
 fn evaluation_schema() -> Value {

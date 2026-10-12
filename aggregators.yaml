@@ -1,7 +1,7 @@
 # Broad-coverage job aggregators (as opposed to companies.yaml, which is
 # one board per company). These search across many employers at once using
 # keyword + location, so they catch companies you haven't identified yet —
-# at the cost of more noise, which is exactly what filters.py exists for.
+# at the cost of more noise, which is exactly what filters.yaml exists for.
 #
 # type: one of "adzuna" | "remotive"
 # params: passed straight through to that aggregator's search API, EXCEPT
@@ -11,10 +11,11 @@
 #     country   — Adzuna's country code, which is part of the URL path
 #                 rather than a query param (default "us")
 #
-# Configured 2026-09-25 for a remote-US platform/DevOps/backend search out
-# of Ohio. Keep `what`/`where` here in sync with filters.yaml's
-# location_allow_patterns and stack_core, or a real result will still get
-# dropped downstream.
+# Ships configured for a US-remote platform / DevOps / backend search, as a
+# worked example. Keep `what`/`where` here in sync with filters.yaml's
+# `location_allow_patterns` and `stack_core` — an aggregator query that
+# reaches outside what filters.yaml accepts just spends requests on results
+# that get dropped downstream.
 
 aggregators:
   - name: Adzuna (US, platform engineer)
@@ -74,19 +75,20 @@ aggregators:
       results_per_page: 50
       max_pages: 3
 
-  - name: Adzuna (Ohio, software engineer — local on-site/hybrid)
-    type: adzuna
-    params:
-      what: "software engineer"
-      where: "Ohio"
-      country: us
-      results_per_page: 50
-      max_pages: 3
-    notes: >
-      The local half of the search: Ohio on-site/hybrid roles, matching
-      filters.yaml's Ohio location patterns. The remote-US entries above
-      won't reliably surface these, since their location strings are city
-      names rather than "United States".
+  # The local half of a search: on-site/hybrid roles near you. The
+  # remote-first entries above won't reliably surface these, because their
+  # location strings are city names rather than "United States". Set `where`
+  # to your state/province or metro and enable the matching patterns in
+  # filters.yaml's `location_allow_patterns`, or this returns rows that are
+  # then dropped for being out of area.
+  # - name: Adzuna (local on-site/hybrid)
+  #   type: adzuna
+  #   params:
+  #     what: "software engineer"
+  #     where: "<your state, province or metro>"
+  #     country: us
+  #     results_per_page: 50
+  #     max_pages: 3
 
   - name: Remotive (remote-only feed)
     type: remotive

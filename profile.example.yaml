@@ -1,5 +1,5 @@
 # Master experience profile — the single source of truth fed into the AI
-# evaluation step (ai_evaluate.py). Organized by functional competency, not
+# evaluation step (src/evaluate.rs). Organized by functional competency, not
 # by job title, so the model judges FUNCTIONAL FIT against a role rather
 # than pattern-matching on past job titles.
 #

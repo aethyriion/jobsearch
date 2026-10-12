@@ -1136,7 +1136,7 @@ pub fn normalize(text: &str) -> String {
 
 /// Location is part of the dedup key so two genuinely distinct postings
 /// with the same title at the same company (e.g. "Backend Engineer" open
-/// in both Columbus and Austin) aren't treated as reposts of each other.
+/// in both Boulder and Austin) aren't treated as reposts of each other.
 pub fn company_title_key(company: &str, title: &str, location: &str) -> String {
     format!(
         "{}::{}::{}",
@@ -1224,7 +1224,7 @@ mod tests {
 
         // Same title, different location — a genuinely distinct posting.
         let mut other_loc = job("Fly.io", "Platform Engineer", "https://a/3");
-        other_loc.location = "Columbus, Ohio".into();
+        other_loc.location = "Boulder, Colorado".into();
         assert!(s.is_new(&other_loc).unwrap());
     }
 
@@ -1581,14 +1581,14 @@ mod tests {
         let s = store();
         assert!(s.upsert_manual_job(&manual("Acme", "Engineer")).unwrap());
         let mut second = manual("Acme", "Engineer");
-        second.location = "Columbus, Ohio".into();
+        second.location = "Boulder, Colorado".into();
         assert!(
             !s.upsert_manual_job(&second).unwrap(),
             "same company+title means the same synthetic URL, so it updates"
         );
         let rows = s.all_candidates().unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].location, "Columbus, Ohio");
+        assert_eq!(rows[0].location, "Boulder, Colorado");
     }
 
     #[test]

@@ -442,7 +442,7 @@ mod tests {
             exclusion_keywords: vec!["sales".into(), "hardware".into()],
             location_allow_patterns: vec![
                 r"remote.*\b(us|usa|united states)\b".into(),
-                r"\bohio\b".into(),
+                r"\bcolorado\b".into(),
             ],
             stack_dealbreakers: vec![r"\bc#".into(), r"\.net\b".into()],
             stack_core: vec![r"\bgo\b".into(), r"\bkubernetes\b".into()],
@@ -494,7 +494,7 @@ mod tests {
     fn location_patterns_are_anchored_enough_to_exclude_other_countries() {
         let f = test_filters();
         assert!(f.location_is_allowed("Remote - US"));
-        assert!(f.location_is_allowed("Columbus, Ohio"));
+        assert!(f.location_is_allowed("Boulder, Colorado"));
         assert!(!f.location_is_allowed("Remote Poland"));
         assert!(!f.location_is_allowed("Berlin, Germany"));
     }
@@ -514,8 +514,8 @@ mod tests {
         // Regression guard for a real bug in filters.yaml: '#' and '+'
         // are not word characters, so a trailing \b demands a word
         // character right after them and the pattern matches nothing at
-        // all. Both spellings lived in stack_dealbreakers until
-        // 2026-09-25 and had silently never fired.
+        // all. Both spellings sat in stack_dealbreakers for a long time
+        // having silently never fired once.
         let broken = Regex::new(r"(?i)\bc#\b").unwrap();
         assert!(!broken.is_match("Strong C# and .NET experience"));
         let fixed = Regex::new(r"(?i)\bc#").unwrap();
