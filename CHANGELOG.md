@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/aethyriion/jobsearch/compare/v0.3.0...v0.3.1) (2026-10-12)
+
+
+### Fixes
+
+* **ci:** let the release actually trigger the publish chain ([0b44440](https://github.com/aethyriion/jobsearch/commit/0b44440df8039935d496de5b884008e07c0cf2dc))
+
 ## [0.3.0](https://github.com/aethyriion/jobsearch/compare/v0.2.0...v0.3.0) (2026-10-12)
 
 
