@@ -1,0 +1,30 @@
+name: Release Please
+
+# Only on main. Never on pull_request — the publish chain this starts has
+# access to repository secrets, and a workflow that secrets can reach must
+# not be triggerable by a fork.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # Watches conventional commits on main and maintains a standing
+      # "chore(release): vX.Y.Z" PR with CHANGELOG.md written and
+      # Cargo.toml bumped. Merging that PR tags the release and publishes
+      # it, which is what `release.yml` waits for.
+      #
+      # The commit type decides the bump, so a docs-only merge cuts no
+      # release at all and a feat cuts a minor. While the version is below
+      # 1.0.0 a breaking change bumps the minor rather than the major,
+      # which is correct semver for 0.x and honest for a tool this young.
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
