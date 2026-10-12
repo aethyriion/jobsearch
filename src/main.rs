@@ -249,6 +249,18 @@ enum Command {
 
     /// Validate every config file and report what's known about stages.
     Check,
+
+    /// Write the default config files into your config directory.
+    ///
+    /// Run this once after installing from crates.io, Homebrew or Scoop —
+    /// the binary ships the defaults compiled in, but nothing on disk until
+    /// you ask for them.
+    Init {
+        /// Overwrite files that already exist. Without this, `init` leaves
+        /// anything you've edited alone and only fills in what's missing.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -263,12 +275,27 @@ fn main() -> Result<()> {
 
 async fn async_main() -> Result<()> {
     let cli = Cli::parse();
-    let paths = Paths::new(cli.root.clone().unwrap_or_else(|| PathBuf::from(".")));
+    let (paths, source) = config::Paths::resolve(cli.root.clone());
     // Load .env from the config root, not the process's cwd, so --root
     // works from anywhere.
-    let _ = dotenvy::from_path(paths.root.join(".env"));
+    let _ = dotenvy::from_path(paths.env_file());
 
-    match cli.command.unwrap_or(Command::Tui) {
+    let command = cli.command.unwrap_or(Command::Tui);
+
+    // Everything except `init` needs config on disk. Saying so plainly
+    // beats the old failure, which was `reading ./companies.yaml` from
+    // whatever directory the user happened to be standing in.
+    if !matches!(command, Command::Init { .. }) && !paths.is_initialized() {
+        anyhow::bail!(
+            "no config found (looked in {}, via {}).\n\n\
+             Run `jobsearch init` to write the defaults there, or point at an\n\
+             existing config directory with `--root DIR` or JOBSEARCH_ROOT.",
+            paths.root.display(),
+            source.describe()
+        );
+    }
+
+    match command {
         Command::Tui => {
             let filters = load_filters(&paths)?;
             let tech = tech::TechDetector::load(paths.tech()).unwrap_or_else(|e| {
@@ -359,6 +386,7 @@ async fn async_main() -> Result<()> {
         } => cmd_tech(&paths, tag, limit, include_dismissed),
         Command::Diagnose { examples, days } => cmd_diagnose(&paths, examples, days),
         Command::Check => cmd_check(&paths),
+        Command::Init { force } => cmd_init(&paths, source, force),
     }
 }
 
@@ -1470,6 +1498,55 @@ fn cmd_diagnose(paths: &Paths, examples: usize, days: i64) -> Result<()> {
 }
 
 // ------------------------------------------------------------------ check
+
+/// Write the bundled config into the config directory.
+///
+/// Deliberately non-destructive by default: the whole point of these files
+/// is that you edit them, and an `init` that clobbered a tuned
+/// `filters.yaml` would be a data-loss bug. `--force` is the explicit
+/// opt-in.
+fn cmd_init(paths: &Paths, source: config::RootSource, force: bool) -> Result<()> {
+    std::fs::create_dir_all(&paths.root)
+        .with_context(|| format!("creating {}", paths.root.display()))?;
+    std::fs::create_dir_all(&paths.data)
+        .with_context(|| format!("creating {}", paths.data.display()))?;
+
+    println!(
+        "config -> {}  (via {})",
+        paths.root.display(),
+        source.describe()
+    );
+    println!("data   -> {}", paths.data.display());
+    println!();
+
+    let mut written = 0usize;
+    let mut kept = 0usize;
+    for (name, contents) in config::BUNDLED_CONFIG {
+        let dest = paths.root.join(name);
+        if dest.exists() && !force {
+            println!("  kept    {name}  (already present)");
+            kept += 1;
+            continue;
+        }
+        std::fs::write(&dest, contents).with_context(|| format!("writing {}", dest.display()))?;
+        println!("  wrote   {name}");
+        written += 1;
+    }
+
+    println!();
+    println!("{written} written, {kept} left alone.");
+    if kept > 0 && !force {
+        println!("Pass --force to overwrite the files that were kept.");
+    }
+    println!();
+    println!("Next:");
+    println!("  1. Edit filters.yaml — location_allow_patterns is US-only as shipped,");
+    println!("     and is the most common reason a first run returns nothing.");
+    println!("  2. cp profile.example.yaml profile.yaml, then write your experience into it");
+    println!("     (only needed for `jobsearch evaluate`).");
+    println!("  3. jobsearch fetch");
+    Ok(())
+}
 
 fn cmd_check(paths: &Paths) -> Result<()> {
     let mut problems = 0;

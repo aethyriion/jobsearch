@@ -1,15 +1,21 @@
 [package]
-name = "job_search"
+name = "jobsearch"
 version = "0.2.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Startup-focused job search pipeline and TUI"
 license = "MIT"
+# cargo-deb and some registries derive a maintainer from this; it is also
+# what crates.io shows. Both MIT copyright holders are named in LICENSE.
+authors = ["Stephen Rhodes <stephen@aethyriion.dev>"]
 readme = "README.md"
 repository = "https://github.com/aethyriion/jobsearch"
 homepage = "https://github.com/aethyriion/jobsearch"
 keywords = ["job-search", "tui", "cli", "ratatui", "sqlite"]
 categories = ["command-line-utilities"]
+# The demo GIF and screenshot are 2 MB and useless to anyone installing
+# the crate; .github likewise.
+exclude = ["docs/**", ".github/**", "*.tape"]
 
 [[bin]]
 name = "jobsearch"
@@ -27,7 +33,7 @@ open = "5"
 ratatui = "0.29"
 crossterm = "0.28"
 regex = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "charset", "http2"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots", "gzip", "charset", "http2"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -35,6 +41,7 @@ serde_yaml = "0.9"
 textwrap = "0.16"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 unicode-width = "0.2"
+directories = "6"
 
 [profile.release]
 opt-level = 2

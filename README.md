@@ -65,18 +65,39 @@ with `sqlite3`.
 
 ## Quick start
 
-Requires **Rust 1.88 or newer**. Nothing else —
-SQLite is compiled in, and TLS is rustls, so there's no system OpenSSL
-dependency either.
+### Install
+
+```bash
+cargo install jobsearch                      # any platform with Rust
+brew install aethyriion/tap/jobsearch        # macOS and Linux
+scoop bucket add aethyriion https://github.com/aethyriion/scoop-bucket
+scoop install jobsearch                      # Windows
+```
+
+Or grab a prebuilt binary from [the latest
+release](https://github.com/aethyriion/jobsearch/releases/latest) and put it
+on your `PATH`. Building from source needs **Rust 1.88 or newer** and nothing
+else — SQLite is compiled in and TLS is rustls, so there's no system OpenSSL:
 
 ```bash
 git clone https://github.com/aethyriion/jobsearch.git
-cd REPO
-cargo build --release          # or: make build
-
-cp .env.example .env                   # fill in what you need — see the comments
-cp profile.example.yaml profile.yaml   # then write your real experience into it
+cd jobsearch && cargo build --release
 ```
+
+### Set up
+
+```bash
+jobsearch init     # writes the default config to your config directory
+```
+
+`init` tells you where it put things. Config goes to `~/.config/jobsearch`
+(`~/Library/Application Support/jobsearch` on macOS, `%APPDATA%\jobsearch` on
+Windows) and the database to the matching data directory. Re-running it never
+overwrites a file you've edited unless you pass `--force`.
+
+Working from a git checkout instead? A directory containing `filters.yaml` is
+used as-is, so the repo keeps working with no setup and its `data/` stays
+local to it.
 
 **Now edit `filters.yaml` before your first fetch.** As shipped,
 `location_allow_patterns` accepts US and US-inclusive remote roles and
@@ -86,23 +107,33 @@ by far the most common reason a first run returns nothing. The file's
 header tells you what to edit; [Configuration](#configuration) has the
 detail.
 
+### Run
+
 ```bash
-./target/release/jobsearch check       # validate every config file
-./target/release/jobsearch discover-yc # learn company stages (free) — see below
-./target/release/jobsearch fetch       # pull jobs (free)
-./target/release/jobsearch             # open the TUI
+jobsearch check          # validate every config file, and show where they live
+jobsearch discover-yc    # learn company stages (free) — see below
+jobsearch fetch          # pull jobs (free)
+jobsearch                # open the TUI
 ```
 
 `discover-yc` is in that list deliberately: **startup mode is on by
-default, and a fresh clone knows no company stages at all**, so without it
-the headline feature has nothing to filter on and `companies.yaml` ships
-with a stage for only 16 of its entries. It needs no credentials.
+default, and a fresh install knows no company stages at all**, so without it
+the headline feature has nothing to filter on — the shipped `companies.yaml`
+has a stage for only 16 of its entries. It needs no credentials.
 
 Scoring with Claude is a separate, optional step — `jobsearch evaluate` —
 and it is the only thing here that costs money. Everything above is free.
 
-`make install` puts `jobsearch` on your `PATH`. It reads its config from
-the working directory, so run it from this repo or pass `--root`.
+### Where things live
+
+| | |
+|---|---|
+| `--root DIR` | wins over everything |
+| `JOBSEARCH_ROOT` | same, via the environment |
+| the working directory | used when it contains a `filters.yaml` |
+| your config directory | the default, and where `init` writes |
+
+`JOBSEARCH_DB_PATH` overrides the database location on its own.
 
 ## How it works
 
@@ -572,6 +603,7 @@ have a score before spending anything, and `--dry-run` shows the queue first.
 
 | Command | What it does |
 |---|---|
+| `jobsearch init` | Write the default config files into your config directory. Run once after installing. `--force` overwrites files you've edited. |
 | `jobsearch` / `jobsearch tui` | The review TUI. Fetch (`r`), score (`e`) and triage without leaving it. |
 | `jobsearch fetch` | Pull from every configured source, filter, dedup, store. Free. `--company <slug>` or `--aggregator <substring>` to run one source in isolation. |
 | `jobsearch evaluate` | Score unevaluated candidates with Claude. **The only step that costs money.** `--url <URL>` scores exactly one, ignoring every queue policy and re-scoring one that already has a score. `--rescore` re-scores everything, for after you change the prompt or `profile.yaml`. `--dry-run` to see the queue, `--limit N` to cap, `--all-stages` to score beyond startups. |
