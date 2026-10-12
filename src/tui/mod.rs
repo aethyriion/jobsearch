@@ -835,9 +835,32 @@ where
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode().context("entering raw mode")?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)
-        .context("entering the alternate screen")?;
-    let terminal = Terminal::new(CrosstermBackend::new(stdout)).context("creating the terminal")?;
+
+    // From here on, any failure must undo raw mode before returning. The
+    // error path used to propagate straight out of `run()`, leaving the
+    // user in raw mode inside the alternate screen with no panic hook
+    // installed yet — stranded, needing to blind-type `reset`.
+    if let Err(e) = execute!(stdout, EnterAlternateScreen) {
+        let _ = disable_raw_mode();
+        return Err(e).context("entering the alternate screen");
+    }
+
+    // Bracketed paste is an optimisation, not a requirement: it makes a
+    // pasted job description arrive as one event instead of a burst of
+    // keystrokes. The legacy Windows console has no implementation and
+    // crossterm returns `Unsupported`, which used to be fatal — on the one
+    // platform where `reset` does not exist. Best-effort instead; the
+    // `Event::Paste` arm simply never fires without it.
+    let _ = execute!(stdout, EnableBracketedPaste);
+
+    let terminal = match Terminal::new(CrosstermBackend::new(stdout)) {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = disable_raw_mode();
+            let _ = execute!(io::stdout(), DisableBracketedPaste, LeaveAlternateScreen);
+            return Err(e).context("creating the terminal");
+        }
+    };
     // A panic in raw mode leaves the terminal unusable — no echo, no line
     // discipline, in the alternate screen — and the user has to blind-type
     // `reset`. Restore first, then let the panic print normally.
