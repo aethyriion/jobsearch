@@ -28,3 +28,9 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          # Must NOT be the default GITHUB_TOKEN. GitHub refuses to trigger
+          # workflows from events raised by that token — a loop guard — so a
+          # release it creates fires no `release: published`, and release.yml
+          # never runs. The symptom is a release with no binaries attached
+          # and nothing published anywhere, with no error to find.
+          token: ${{ secrets.TAP_TOKEN }}
