@@ -3,7 +3,7 @@ name = "jobsearch"
 version = "0.3.1"
 edition = "2021"
 rust-version = "1.88"
-description = "Startup-focused job search pipeline and TUI"
+description = "Terminal job-application tracker and ATS scraper: pulls roles from Greenhouse, Ashby, Lever and more, filters locally, scores fit with Claude"
 license = "MIT"
 # cargo-deb and some registries derive a maintainer from this; it is also
 # what crates.io shows. Both MIT copyright holders are named in LICENSE.
@@ -11,7 +11,7 @@ authors = ["Stephen Rhodes <stephen@aethyriion.dev>"]
 readme = "README.md"
 repository = "https://github.com/aethyriion/jobsearch"
 homepage = "https://github.com/aethyriion/jobsearch"
-keywords = ["job-search", "tui", "cli", "ratatui", "sqlite"]
+keywords = ["job-search", "job-tracker", "tui", "ratatui", "cli"]
 categories = ["command-line-utilities"]
 # The demo GIF and screenshot are 2 MB and useless to anyone installing
 # the crate; .github likewise.

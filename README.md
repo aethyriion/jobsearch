@@ -1,9 +1,10 @@
 <h1 align="center">jobsearch</h1>
 
 <p align="center">
-  <strong>A startup-focused job search that lives in your terminal.</strong><br>
-  Pulls roles straight from company ATS APIs, filters them against rules you own,<br>
-  scores the fit, and gives you one keyboard-driven board to work from.
+  <strong>A startup-focused job search and application tracker that lives in your terminal.</strong><br>
+  Pulls roles straight from Greenhouse, Ashby, Lever, Workable and SmartRecruiters,<br>
+  filters them against rules you own, scores the fit, and gives you one<br>
+  keyboard-driven board to work from.
 </p>
 
 <p align="center">
