@@ -1,25 +1,16 @@
 //! The terminal event loop.
 //!
-//! Three things feed it, and `tokio::select!` merges them:
+//! `tokio::select!` merges three sources: keyboard input read on its own
+//! OS thread (crossterm's read blocks, and blocking a tokio worker would
+//! starve the runtime background fetches run on), progress from those
+//! fetches, and a redraw tick so long tasks keep animating.
 //!
-//! 1. keyboard input, read on a dedicated OS thread (crossterm's read is
-//!    blocking, and a blocking read on a tokio worker would starve the
-//!    runtime the background fetches run on);
-//! 2. progress from a background fetch or scoring run;
-//! 3. a redraw tick, so a long-running task's progress keeps animating
-//!    even when nothing else happens.
-//!
-//! Background work gets its OWN `Store`, not a shared one. SQLite in WAL
-//! mode handles concurrent connections, and a second connection is far
-//! simpler than making one `rusqlite::Connection` safely shareable across
-//! tasks — the UI stays responsive and readable throughout a fetch.
-//!
-//! That background work runs on a dedicated OS thread with its own
-//! current-thread runtime rather than via `tokio::spawn`. `Connection` is
-//! `Send` but not `Sync`, so a future holding `&Store` across an `.await`
-//! isn't `Send` and can't be spawned onto the shared pool. Pinning each
-//! run to one thread sidesteps that without wrapping the connection in a
-//! mutex that would serialize the UI's reads behind the fetch's writes.
+//! Background work opens its own `Store` and runs on a dedicated thread
+//! with a current-thread runtime. `Connection` is `Send` but not `Sync`,
+//! so a future holding `&Store` across an `.await` can't be spawned onto
+//! the shared pool; pinning each run to one thread avoids a mutex that
+//! would serialize the UI's reads behind the fetch's writes. WAL mode
+//! lets both connections coexist.
 
 pub mod app;
 pub mod form;

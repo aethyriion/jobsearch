@@ -1,31 +1,17 @@
 //! Deterministic tech-stack detection from a job description.
 //!
-//! No model, no cost, no network — just `tech.yaml`'s patterns run over
-//! the stored JD text. That's enough to answer the questions that actually
-//! shape a shortlist ("which of these are AWS and which are GCP", "who
-//! really uses Rust") without spending a token per posting.
+//! No model, no cost, no network — `tech.yaml`'s patterns run over stored
+//! JD text. Enough to answer which postings are AWS and which are GCP, and
+//! who really uses Rust, without spending a token per posting.
 //!
-//! Derived, never stored, for the same reason seniority is: it's a pure
-//! function of text already in the database, so improving a pattern takes
-//! effect immediately rather than needing a migration and a re-scan.
+//! Derived, never stored: it's a pure function of text already in the
+//! database, so improving a pattern takes effect on the next read instead
+//! of needing a migration and a re-scan.
 //!
-//! ### Why a RegexSet
-//!
-//! There are ~180 patterns and ~900 stored candidates, several KB of text
-//! each. Running them one at a time is ~160M character comparisons per
-//! reload. `RegexSet` compiles them into a single automaton and answers
-//! "which of these match" in ONE pass, which is what makes recomputing on
-//! every read affordable at all.
-//!
-//! ### Why every pattern is compiled with `(?-u)`
-//!
-//! Measured on the real database (925 candidates, 7.1 MB of HTML): the
-//! same patterns take **1.21s in Unicode mode and 43ms in ASCII mode**, for
-//! byte-identical results. The regex crate defaults to Unicode-aware `\b`
-//! and Unicode case folding, both of which are far more expensive than the
-//! ASCII equivalents and buy nothing here — every pattern in `tech.yaml`
-//! is ASCII. That 28x is the difference between tagging on every read and
-//! having to cache tags in the database.
+//! Two decisions make that affordable. All ~160 patterns compile into one
+//! `RegexSet`, answering "which of these match" in a single pass. And each
+//! is compiled `(?-u)`: the crate's Unicode `\b` and case folding cost
+//! ~28x here for byte-identical results, since every pattern is ASCII.
 
 use anyhow::{Context, Result};
 use regex::RegexSet;

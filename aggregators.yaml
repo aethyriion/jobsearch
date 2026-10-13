@@ -123,13 +123,8 @@ aggregators:
       everything a human would. Dedup means re-reading the same thread on a
       later run costs nothing.
 
-  # Wellfound (formerly AngelList Talent) is the other obvious
-  # startup-native source and is deliberately absent rather than disabled-
-  # with-a-TODO. Its GraphQL endpoint returns 403 behind a Cloudflare
-  # interstitial for any client that doesn't present as a full browser —
-  # and so does robots.txt. Reading it would mean impersonating a browser
-  # specifically to defeat bot protection the site is clearly choosing to
-  # apply, so this tool doesn't. The YC directory (`jobsearch discover-yc`)
-  # plus the HN thread above cover the same ground through interfaces meant
-  # to be read by programs. If you want Wellfound coverage, their email job
-  # alerts into a mailbox you read yourself is the supported path.
+  # Wellfound is absent on purpose rather than disabled-with-a-TODO: it
+  # sits behind Cloudflare and reading it would mean defeating bot
+  # protection the site is plainly choosing to apply. The README has the
+  # full reasoning. The YC directory and the HN thread cover the same
+  # ground through interfaces meant to be read by programs.

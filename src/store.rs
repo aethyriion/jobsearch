@@ -1,28 +1,17 @@
 //! SQLite-backed local datastore: dedup tracking, full job details, AI
-//! evaluations, your own status/notes, and what's known about each
+//! evaluations, your own status and notes, and what's known about each
 //! company's stage.
 //!
-//! Dedup uses two keys:
-//!   1. the exact job URL
-//!   2. a normalized (company, title, location) triple — catches reposts
-//!      under a new URL
+//! Dedup uses two keys — the exact URL, and a normalized
+//! (company, title, location) triple that catches reposts under a new URL.
+//! A job is new only if neither has been seen, and seen jobs are recorded
+//! whether or not they passed the filters, so a later run never
+//! re-considers the same posting.
 //!
-//! A job is only "new" if neither key has been seen. Seen jobs are
-//! recorded whether or not they passed the content filters, so a future
-//! run never re-considers the same posting.
-//!
-//! `job_details` holds the full record (including the JD text) for every
-//! job ever seen, keyed by URL. That's deliberate: a full JD is several KB
-//! of HTML, and putting it in the CSV would make the file unreadable in a
-//! spreadsheet and defeat the point of the CSV being a quick scannable
-//! list. Query this table instead when you want to see why a job was kept
-//! or dropped, or to feed the JD to the AI step without re-fetching.
-//!
-//! One file, one schema, and no migration step between the CLI and the
-//! TUI: they are the same binary reading the same tables. Anything else
-//! that wants this data — a script, a notebook, another UI — can open the
-//! file directly, which is why the schema is plain and the column names
-//! are meant to be read by a human.
+//! `job_details` keeps the full JD for everything ever seen. Several KB of
+//! HTML per row would make the CSV exports useless in a spreadsheet, so
+//! the text lives here and the CSVs stay scannable. Query this table to
+//! see why a job was dropped, or to re-score without re-fetching.
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};

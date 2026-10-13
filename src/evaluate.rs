@@ -1,27 +1,19 @@
 //! Stage 2: AI evaluation via the Anthropic Messages API.
 //!
-//! Reads every job that passed the deterministic filters but hasn't been
-//! scored yet, sends it to Claude alongside your profile, and asks for a
-//! FUNCTIONAL FIT judgment — not a title match. Results go into the
-//! `ai_evaluations` table and the scored CSV.
+//! Scores jobs that passed the deterministic filters against your profile,
+//! asking for functional fit rather than a title match, and writes the
+//! result to `ai_evaluations`.
 //!
-//! This is the ONLY part of the pipeline that costs money. Everything
-//! upstream is free, which is the whole point of filtering deterministically
-//! first: by the time a job reaches here it has already passed title,
-//! location and stack screening, so the scored volume is small.
+//! This is the only part of the pipeline that costs money, which is why
+//! everything upstream filters first: by the time a job reaches here it
+//! has already passed title, location and stack screening.
 //!
-//! It also does double duty as the third source of startup signal. The
-//! same call that scores fit is asked to place the company on the stage
-//! axis, because the model is already reading the full JD — where funding
-//! history, team size and "founding engineer" language usually sit in
-//! plain text. That covers the long tail of aggregator- and HN-sourced
-//! companies that will never be hand-curated and aren't in the YC
-//! directory. A curated or YC-sourced stage always wins over this one
-//! (see `Store::upsert_company_stage`).
+//! The same call also places the company on the stage axis, since the
+//! model is already reading a JD where funding history and team size
+//! usually sit in plain text. A curated or YC-sourced stage always beats
+//! it — see `Store::upsert_company_stage`.
 //!
-//! Uses the REST API directly rather than an SDK because Anthropic
-//! publishes no official Rust SDK; the request shape below is the
-//! documented `POST /v1/messages` contract.
+//! Raw HTTP rather than an SDK: Anthropic publishes none for Rust.
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
