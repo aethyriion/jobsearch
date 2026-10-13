@@ -227,6 +227,11 @@ jobs:
 
             def install
               bin.install "jobsearch"
+              # MIT requires the copyright and permission notice to travel
+              # with the software. Installing only the binary would drop the
+              # LICENSE that is in the tarball, and this project carries two
+              # copyright holders.
+              doc.install "LICENSE", "README.md"
             end
 
             def caveats
