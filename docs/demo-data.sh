@@ -18,7 +18,7 @@ rm -f "$DEMO_DB"
 
 cargo build --release
 # Let the binary create the authoritative schema rather than duplicating it.
-DB_PATH="$DEMO_DB" ./target/release/jobsearch check >/dev/null
+JOBSEARCH_DB_PATH="$DEMO_DB" ./target/release/jobsearch check >/dev/null
 
 DEMO_DB="$DEMO_DB" python3 - <<'PY'
 import os, sqlite3

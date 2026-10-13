@@ -434,16 +434,25 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
 /// at the top of a pane you may never scroll, rather than making you page
 /// past a full job description to find the score.
 fn detail_lines(row: &JobRow, stale_days: Option<i64>) -> Vec<Line<'static>> {
-    let mut lines = vec![
-        Line::from(Span::styled(
-            row.title.clone(),
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            row.company.clone(),
-            Style::default().fg(Color::Cyan),
-        )),
-    ];
+    let mut lines = Vec::new();
+    push_header(&mut lines, row);
+    push_scores(&mut lines, row);
+    push_status(&mut lines, row, stale_days);
+    push_notes(&mut lines, row);
+    push_stack(&mut lines, row);
+    push_description(&mut lines, row);
+    lines
+}
+
+fn push_header(lines: &mut Vec<Line<'static>>, row: &JobRow) {
+    lines.push(Line::from(Span::styled(
+        row.title.clone(),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(Span::styled(
+        row.company.clone(),
+        Style::default().fg(Color::Cyan),
+    )));
 
     let mut meta = vec![Span::raw(row.location.clone())];
     match row.seniority() {
@@ -562,7 +571,9 @@ fn detail_lines(row: &JobRow, stale_days: Option<i64>) -> Vec<Line<'static>> {
             .add_modifier(Modifier::UNDERLINED),
     )));
     lines.push(Line::from(""));
+}
 
+fn push_scores(lines: &mut Vec<Line<'static>>, row: &JobRow) {
     match (row.match_score, row.recommendation.as_deref()) {
         (Some(score), Some(rec)) => {
             lines.push(Line::from(vec![
@@ -608,7 +619,9 @@ fn detail_lines(row: &JobRow, stale_days: Option<i64>) -> Vec<Line<'static>> {
             Style::default().fg(Color::DarkGray),
         ))),
     }
+}
 
+fn push_status(lines: &mut Vec<Line<'static>>, row: &JobRow, stale_days: Option<i64>) {
     if let Some(status) = &row.my_status {
         let mut head = vec![
             Span::styled("your status: ", Style::default().fg(Color::DarkGray)),
@@ -694,6 +707,9 @@ fn detail_lines(row: &JobRow, stale_days: Option<i64>) -> Vec<Line<'static>> {
             }
         }
     }
+}
+
+fn push_notes(lines: &mut Vec<Line<'static>>, row: &JobRow) {
     if let Some(notes) = &row.notes {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
@@ -725,7 +741,9 @@ fn detail_lines(row: &JobRow, stale_days: Option<i64>) -> Vec<Line<'static>> {
             }
         }
     }
+}
 
+fn push_stack(lines: &mut Vec<Line<'static>>, row: &JobRow) {
     if !row.tech.is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
@@ -758,7 +776,9 @@ fn detail_lines(row: &JobRow, stale_days: Option<i64>) -> Vec<Line<'static>> {
             lines.push(Line::from(line));
         }
     }
+}
 
+fn push_description(lines: &mut Vec<Line<'static>>, row: &JobRow) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "── job description ──",
@@ -775,8 +795,6 @@ fn detail_lines(row: &JobRow, stale_days: Option<i64>) -> Vec<Line<'static>> {
             lines.push(Line::from(l.to_string()));
         }
     }
-
-    lines
 }
 
 fn draw_status(f: &mut Frame, area: Rect, app: &App) {

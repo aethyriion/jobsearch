@@ -21,7 +21,7 @@ Set Theme "Catppuccin Mocha"
 Set TypingSpeed 55ms
 
 Hide
-Type "export DB_PATH=${DEMO_DB:-/tmp/jobsearch-demo/data/seen_jobs.sqlite3}"
+Type "export JOBSEARCH_DB_PATH=${DEMO_DB:-/tmp/jobsearch-demo/data/seen_jobs.sqlite3}"
 Enter
 Type "export PATH=$PWD/target/release:$PATH"
 Enter
