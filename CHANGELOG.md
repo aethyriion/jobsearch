@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.2](https://github.com/aethyriion/jobsearch/compare/v0.3.1...v0.3.2) (2026-10-13)
+
+
+### Fixes
+
+* **docs:** correct the dependency badge and database paths ([65af033](https://github.com/aethyriion/jobsearch/commit/65af0333710d656e45380dd19044b32910d38aff))
+* **release:** ship the licence through Homebrew too ([a1b997b](https://github.com/aethyriion/jobsearch/commit/a1b997b528c3221f9fb8a8971144c4999e88f67a))
+
+
+### Internal
+
+* **tui:** break up the detail pane builder ([1aa212d](https://github.com/aethyriion/jobsearch/commit/1aa212dde6310181e7c37df74392be9370176f54))
+
+
+### Documentation
+
+* add a recording sized for social feeds ([b237a3e](https://github.com/aethyriion/jobsearch/commit/b237a3ee1b6cf693fe5241e9cd1bbb4b60610951))
+* split the reference out of the README ([9788471](https://github.com/aethyriion/jobsearch/commit/978847189654755d7585f8fef3163c3380aea53c))
+
 ## [0.3.1](https://github.com/aethyriion/jobsearch/compare/v0.3.0...v0.3.1) (2026-10-12)
 
 

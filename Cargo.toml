@@ -1,6 +1,6 @@
 [package]
 name = "jobsearch"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 rust-version = "1.88"
 description = "Terminal job-application tracker and ATS scraper: pulls roles from Greenhouse, Ashby, Lever and more, filters locally, scores fit with Claude"
