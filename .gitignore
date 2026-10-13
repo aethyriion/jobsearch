@@ -9,3 +9,6 @@ profile.yaml
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
+
+# Generated social clip — rebuild with docs/demo-social.sh when needed.
+docs/demo-social.mp4
