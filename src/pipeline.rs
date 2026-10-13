@@ -23,9 +23,15 @@ use crate::sources::{aggregators, ats};
 use crate::store::Store;
 
 /// How many company boards to fetch at once. Enough to hide the latency of
-/// ~130 sequential requests, low enough to stay a polite guest on ATS APIs
+/// a long list of sequential requests, low enough to stay a polite guest
 /// that are doing this for free.
 pub const DEFAULT_CONCURRENCY: usize = 8;
+
+/// Below this, the model's own stage guess is discarded rather than
+/// stored. An uncertain guess is worse than none: `company_stage` is keyed
+/// by company, so one bad call leaks onto every future posting from that
+/// employer.
+const MIN_STAGE_CONFIDENCE: i64 = 50;
 
 /// Everything the UI layers want to hear about while a long job runs.
 #[derive(Debug, Clone)]
@@ -232,7 +238,7 @@ pub async fn evaluate_one(
     let eval = evaluator.evaluate(row, truncated).await?;
     store.save_evaluation(&row.url, &eval, evaluator.model())?;
     if let Some(stage) = eval.company_stage {
-        if eval.stage_confidence.unwrap_or(0) >= 50 {
+        if eval.stage_confidence.unwrap_or(0) >= MIN_STAGE_CONFIDENCE {
             store.upsert_company_stage(&CompanyStage {
                 company: row.company.clone(),
                 stage,
@@ -284,7 +290,7 @@ where
                 // a coin-flip stage is worse than no stage, because
                 // startup mode would act on it.
                 if let Some(stage) = eval.company_stage {
-                    if eval.stage_confidence.unwrap_or(0) >= 50 {
+                    if eval.stage_confidence.unwrap_or(0) >= MIN_STAGE_CONFIDENCE {
                         store.upsert_company_stage(&CompanyStage {
                             company: job.company.clone(),
                             stage,

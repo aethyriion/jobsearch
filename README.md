@@ -11,7 +11,7 @@
   <a href="https://github.com/aethyriion/jobsearch/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/aethyriion/jobsearch/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
   <img alt="Rust 1.88+" src="https://img.shields.io/badge/rust-1.88%2B-orange.svg">
-  <img alt="Single binary" src="https://img.shields.io/badge/deps-none-brightgreen.svg">
+  <img alt="No system dependencies" src="https://img.shields.io/badge/system%20deps-none-brightgreen.svg">
 </p>
 
 <p align="center">
@@ -154,7 +154,7 @@ and it is the only thing here that costs money. Everything above is free.
    engineering-shaped title, isn't in an allowed location, or whose JD
    requires a stack you've excluded.
 
-3. **Dedup** — everything fetched goes into `data/seen_jobs.sqlite3`,
+3. **Dedup** — everything fetched goes into the SQLite database,
    keyed both by URL and by normalized company+title+location, so re-runs
    only ever surface genuinely new postings. Jobs that *fail* the filters
    are stored too, which is what makes `jobsearch refilter` possible.
@@ -754,7 +754,8 @@ recompile.
 
 ## What's stored
 
-One SQLite file, `data/seen_jobs.sqlite3`:
+One SQLite file — `seen_jobs.sqlite3`, in your data directory, or under
+`data/` when you run from a checkout:
 
 | Table | Holds |
 |---|---|
@@ -774,7 +775,8 @@ without special-casing.
 
 JD text deliberately stays out of the CSVs: a multi-KB job description in
 a spreadsheet cell defeats the point of the CSV being a quick scannable
-list. `data/candidates.csv` and `data/scored_candidates.csv` are exports,
+list. `candidates.csv` and `scored_candidates.csv`, written beside the
+database, are exports,
 not the source of truth.
 
 ## A note on Wellfound

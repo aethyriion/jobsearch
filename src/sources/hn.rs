@@ -26,7 +26,7 @@ use serde::Deserialize;
 use super::http;
 use crate::config::Aggregator;
 use crate::filters::Filters;
-use crate::model::{Job, Stage, StageHint, StageSource};
+use crate::model::Job;
 
 const API: &str = "https://hn.algolia.com/api/v1";
 
@@ -250,36 +250,6 @@ fn first_url_in(html: &str) -> Option<String> {
     url.starts_with("http").then_some(url)
 }
 
-/// YC companies get a stage from the directory; this is the fallback for
-/// everyone else the AI step hasn't reached yet. Unused today but kept
-/// deliberately: it is the hook for a future "posting mentions Series A"
-/// heuristic, and is covered by tests so it can't rot silently.
-#[allow(dead_code)]
-pub fn stage_hint_from_text(text: &str) -> Option<StageHint> {
-    let lower = text.to_lowercase();
-    let stage = if lower.contains("pre-seed") || lower.contains("preseed") {
-        Stage::PreSeed
-    } else if lower.contains("seed-stage")
-        || lower.contains("seed stage")
-        || lower.contains("just raised our seed")
-    {
-        Stage::Seed
-    } else if lower.contains("series a") {
-        Stage::SeriesA
-    } else if lower.contains("series b") {
-        Stage::SeriesB
-    } else if lower.contains("series c") || lower.contains("series d") {
-        Stage::SeriesC
-    } else {
-        return None;
-    };
-    Some(StageHint {
-        stage,
-        headcount: None,
-        source: StageSource::Ai,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,14 +321,5 @@ mod tests {
     fn applies_the_title_filter_so_non_engineering_posts_are_dropped() {
         let html = "<p>Acme | Head of Sales | Remote</p>";
         assert!(parse_posting(html, &hit("1", 9), 9, "t", &filters()).is_none());
-    }
-
-    #[test]
-    fn detects_stage_language_in_prose() {
-        assert_eq!(
-            stage_hint_from_text("We just raised our Series A and are 20 people.").map(|h| h.stage),
-            Some(Stage::SeriesA)
-        );
-        assert_eq!(stage_hint_from_text("We are a profitable company."), None);
     }
 }
