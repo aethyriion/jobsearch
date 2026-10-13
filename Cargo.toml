@@ -37,7 +37,10 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
+# serde_yaml itself is archived upstream. serde-yaml-bw is the fork still
+# receiving releases; aliased to the old name so the call sites stay
+# unchanged and the swap is reversible in one line.
+serde_yaml = { package = "serde_yaml_bw", version = "2" }
 textwrap = "0.16"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 unicode-width = "0.2"

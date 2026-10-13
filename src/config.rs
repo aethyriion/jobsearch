@@ -90,17 +90,17 @@ fn default_true() -> bool {
 impl Aggregator {
     pub fn param_str(&self, key: &str) -> Option<String> {
         self.params.get(key).and_then(|v| match v {
-            serde_yaml::Value::String(s) => Some(s.clone()),
-            serde_yaml::Value::Number(n) => Some(n.to_string()),
-            serde_yaml::Value::Bool(b) => Some(b.to_string()),
+            serde_yaml::Value::String(s, ..) => Some(s.clone()),
+            serde_yaml::Value::Number(n, ..) => Some(n.to_string()),
+            serde_yaml::Value::Bool(b, ..) => Some(b.to_string()),
             _ => None,
         })
     }
 
     pub fn param_u64(&self, key: &str) -> Option<u64> {
         self.params.get(key).and_then(|v| match v {
-            serde_yaml::Value::Number(n) => n.as_u64(),
-            serde_yaml::Value::String(s) => s.parse().ok(),
+            serde_yaml::Value::Number(n, ..) => n.as_u64(),
+            serde_yaml::Value::String(s, ..) => s.parse().ok(),
             _ => None,
         })
     }
@@ -116,9 +116,9 @@ impl Aggregator {
             .filter(|(k, _)| !exclude.contains(&k.as_str()))
             .filter_map(|(k, v)| {
                 let s = match v {
-                    serde_yaml::Value::String(s) => s.clone(),
-                    serde_yaml::Value::Number(n) => n.to_string(),
-                    serde_yaml::Value::Bool(b) => b.to_string(),
+                    serde_yaml::Value::String(s, ..) => s.clone(),
+                    serde_yaml::Value::Number(n, ..) => n.to_string(),
+                    serde_yaml::Value::Bool(b, ..) => b.to_string(),
                     _ => return None,
                 };
                 Some((k.clone(), s))
