@@ -99,8 +99,15 @@ struct GhLocation {
 pub async fn fetch_greenhouse(company: &str, slug: &str) -> Result<Vec<Job>> {
     let url = format!("https://boards-api.greenhouse.io/v1/boards/{slug}/jobs");
     let data: GhResponse = http::get_json_with(&url, &[("content".into(), "true".into())]).await?;
-    Ok(data
-        .jobs
+    Ok(greenhouse_jobs(company, data))
+}
+
+/// Split from the fetch so the shape each ATS returns can be tested
+/// without a network call. Every one of these providers has its own idea
+/// of where the location, the URL and the date live, and those mappings
+/// are the part that silently breaks when a provider changes.
+fn greenhouse_jobs(company: &str, data: GhResponse) -> Vec<Job> {
+    data.jobs
         .into_iter()
         .map(|j| Job {
             company: company.to_string(),
@@ -111,7 +118,7 @@ pub async fn fetch_greenhouse(company: &str, slug: &str) -> Result<Vec<Job>> {
             description: j.content.unwrap_or_default(),
             ..Default::default()
         })
-        .collect())
+        .collect()
 }
 
 // ------------------------------------------------------------------ ashby
@@ -145,8 +152,11 @@ struct AshbyJob {
 pub async fn fetch_ashby(company: &str, slug: &str) -> Result<Vec<Job>> {
     let url = format!("https://api.ashbyhq.com/posting-api/job-board/{slug}");
     let data: AshbyResponse = http::get_json(&url).await?;
-    Ok(data
-        .jobs
+    Ok(ashby_jobs(company, data))
+}
+
+fn ashby_jobs(company: &str, data: AshbyResponse) -> Vec<Job> {
+    data.jobs
         .into_iter()
         .map(|j| Job {
             company: company.to_string(),
@@ -160,7 +170,7 @@ pub async fn fetch_ashby(company: &str, slug: &str) -> Result<Vec<Job>> {
                 .unwrap_or_default(),
             ..Default::default()
         })
-        .collect())
+        .collect()
 }
 
 // --------------------------------------------------------------- workable
@@ -204,8 +214,11 @@ struct WorkableLocation {
 pub async fn fetch_workable(company: &str, slug: &str) -> Result<Vec<Job>> {
     let url = format!("https://apply.workable.com/api/v1/widget/accounts/{slug}?details=true");
     let data: WorkableResponse = http::get_json(&url).await?;
-    Ok(data
-        .jobs
+    Ok(workable_jobs(company, data))
+}
+
+fn workable_jobs(company: &str, data: WorkableResponse) -> Vec<Job> {
+    data.jobs
         .into_iter()
         .map(|j| {
             let loc = j.location.unwrap_or(WorkableLocation {
@@ -237,7 +250,7 @@ pub async fn fetch_workable(company: &str, slug: &str) -> Result<Vec<Job>> {
                 ..Default::default()
             }
         })
-        .collect())
+        .collect()
 }
 
 // ------------------------------------------------------------------ lever
@@ -273,8 +286,11 @@ struct LeverCategories {
 pub async fn fetch_lever(company: &str, slug: &str) -> Result<Vec<Job>> {
     let url = format!("https://api.lever.co/v0/postings/{slug}?mode=json");
     let data: Vec<LeverJob> = http::get_json(&url).await?;
-    Ok(data
-        .into_iter()
+    Ok(lever_jobs(company, data))
+}
+
+fn lever_jobs(company: &str, data: Vec<LeverJob>) -> Vec<Job> {
+    data.into_iter()
         .map(|j| {
             let cats = j.categories.unwrap_or(LeverCategories {
                 location: None,
@@ -298,7 +314,7 @@ pub async fn fetch_lever(company: &str, slug: &str) -> Result<Vec<Job>> {
                 ..Default::default()
             }
         })
-        .collect())
+        .collect()
 }
 
 fn epoch_millis_to_iso(ms: i64) -> Option<String> {
@@ -365,35 +381,9 @@ pub async fn fetch_smartrecruiters(
         }
 
         for p in data.content {
-            let loc = p.location.unwrap_or(SrLocation {
-                city: None,
-                region: None,
-                country: None,
-                remote: None,
-            });
-            let mut loc_str = [loc.city, loc.region, loc.country]
-                .into_iter()
-                .flatten()
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join(", ");
-            if loc.remote == Some(true) {
-                loc_str = if loc_str.is_empty() {
-                    "Remote".to_string()
-                } else {
-                    format!("Remote ({loc_str})")
-                };
-            }
-
+            let loc_str = smartrecruiters_location(p.location);
             let posting_id = p.id.unwrap_or_default();
-            let job_url = p
-                .apply_url
-                .or(p.reference)
-                .filter(|u| !u.is_empty())
-                .or_else(|| {
-                    (!posting_id.is_empty())
-                        .then(|| format!("https://jobs.smartrecruiters.com/{slug}/{posting_id}"))
-                });
+            let job_url = smartrecruiters_url(slug, &posting_id, p.apply_url, p.reference);
             // No applyUrl, ref or id to build any identifier from — skip
             // rather than store an empty URL, which would make dedup treat
             // every subsequent url-less posting as a duplicate of the
@@ -430,6 +420,51 @@ pub async fn fetch_smartrecruiters(
 /// Best-effort: any failure (private board, 404, timeout) means no
 /// description, not a failed run — the filters treat an empty description
 /// as "unknown, don't reject on stack alone".
+/// City, region and country joined, with the remote flag folded in.
+/// SmartRecruiters splits the location across four optional fields and
+/// signals remote separately, so a posting can be remote with no place
+/// name at all.
+fn smartrecruiters_location(location: Option<SrLocation>) -> String {
+    let loc = location.unwrap_or(SrLocation {
+        city: None,
+        region: None,
+        country: None,
+        remote: None,
+    });
+    let joined = [loc.city, loc.region, loc.country]
+        .into_iter()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+    match (loc.remote, joined.is_empty()) {
+        (Some(true), true) => "Remote".to_string(),
+        (Some(true), false) => format!("Remote ({joined})"),
+        _ => joined,
+    }
+}
+
+/// `applyUrl`, then `ref`, then one built from the posting id.
+///
+/// Returns None when there is nothing to build an identifier from. That
+/// posting gets skipped rather than stored with an empty URL, because the
+/// URL is half the dedup key — one blank would make every later url-less
+/// posting look like a duplicate of the first.
+fn smartrecruiters_url(
+    slug: &str,
+    posting_id: &str,
+    apply_url: Option<String>,
+    reference: Option<String>,
+) -> Option<String> {
+    apply_url
+        .or(reference)
+        .filter(|u| !u.is_empty())
+        .or_else(|| {
+            (!posting_id.is_empty())
+                .then(|| format!("https://jobs.smartrecruiters.com/{slug}/{posting_id}"))
+        })
+}
+
 async fn fetch_smartrecruiters_description(slug: &str, posting_id: &str) -> String {
     #[derive(Deserialize)]
     struct Detail {
@@ -461,4 +496,187 @@ async fn fetch_smartrecruiters_description(slug: &str, posting_id: &str) -> Stri
         })
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each provider puts the location, the URL and the date somewhere
+    /// different, and several of them send `null` for fields the docs
+    /// describe as strings. A posting whose JSON shape shifts does not
+    /// fail loudly — it arrives with an empty title or no URL and then
+    /// quietly poisons dedup, so the mapping is worth pinning down.
+    fn parse<T: serde::de::DeserializeOwned>(json: &str) -> T {
+        serde_json::from_str(json).expect("fixture should deserialize")
+    }
+
+    #[test]
+    fn greenhouse_maps_a_posting() {
+        let data: GhResponse = parse(
+            r#"{"jobs":[{
+                "title":"Platform Engineer",
+                "location":{"name":"Remote - US"},
+                "absolute_url":"https://boards.greenhouse.io/acme/jobs/1",
+                "first_published":"2026-10-01T00:00:00Z",
+                "content":"<p>Kubernetes</p>"
+            }]}"#,
+        );
+        let jobs = greenhouse_jobs("Acme", data);
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].company, "Acme");
+        assert_eq!(jobs[0].title, "Platform Engineer");
+        assert_eq!(jobs[0].location, "Remote - US");
+        assert_eq!(jobs[0].posted_at.as_deref(), Some("2026-10-01T00:00:00Z"));
+    }
+
+    /// A real Greenhouse board sent `"location": {"name": null}`, which
+    /// aborted the whole company's fetch before `null_to_default` existed.
+    /// One employer's null must not cost you every posting they have.
+    #[test]
+    fn greenhouse_survives_nulls_where_strings_are_documented() {
+        let data: GhResponse =
+            parse(r#"{"jobs":[{"title":null,"location":{"name":null},"absolute_url":null}]}"#);
+        let jobs = greenhouse_jobs("Acme", data);
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].title, "");
+        assert_eq!(jobs[0].location, "");
+    }
+
+    #[test]
+    fn greenhouse_falls_back_to_updated_at_when_unpublished() {
+        let data: GhResponse =
+            parse(r#"{"jobs":[{"title":"SRE","absolute_url":"u","updated_at":"2026-09-09"}]}"#);
+        assert_eq!(
+            greenhouse_jobs("Acme", data)[0].posted_at.as_deref(),
+            Some("2026-09-09")
+        );
+    }
+
+    /// Ashby names the same field two ways depending on the board's age,
+    /// and serves either plain text or HTML for the description.
+    #[test]
+    fn ashby_accepts_either_spelling_of_location_and_url() {
+        let modern: AshbyResponse = parse(
+            r#"{"jobs":[{"title":"Infra","location":"Remote (US)","jobUrl":"https://a/1","descriptionPlain":"text"}]}"#,
+        );
+        let j = &ashby_jobs("Acme", modern)[0];
+        assert_eq!(j.location, "Remote (US)");
+        assert_eq!(j.url, "https://a/1");
+        assert_eq!(j.description, "text");
+
+        let legacy: AshbyResponse = parse(
+            r#"{"jobs":[{"title":"Infra","locationName":"Remote","applyUrl":"https://a/2","descriptionHtml":"<p>html</p>"}]}"#,
+        );
+        let j = &ashby_jobs("Acme", legacy)[0];
+        assert_eq!(j.location, "Remote");
+        assert_eq!(j.url, "https://a/2");
+        assert_eq!(j.description, "<p>html</p>");
+    }
+
+    #[test]
+    fn workable_joins_the_location_parts_it_actually_has() {
+        let data: WorkableResponse = parse(
+            r#"{"jobs":[{"title":"DevOps","location":{"city":"Austin","country":"United States"},"url":"https://w/1"}]}"#,
+        );
+        assert_eq!(
+            workable_jobs("Acme", data)[0].location,
+            "Austin, United States"
+        );
+    }
+
+    /// Workable flags remote separately from the place name, so a role can
+    /// be remote *and* city-tagged, or remote with no city at all.
+    #[test]
+    fn workable_folds_in_the_remote_flag() {
+        let with_city: WorkableResponse = parse(
+            r#"{"jobs":[{"title":"X","location":{"city":"Berlin","workplace":"remote"},"url":"u"}]}"#,
+        );
+        assert_eq!(
+            workable_jobs("Acme", with_city)[0].location,
+            "Remote (Berlin)"
+        );
+
+        let without: WorkableResponse =
+            parse(r#"{"jobs":[{"title":"X","location":{"workplace":"remote"},"url":"u"}]}"#);
+        assert_eq!(workable_jobs("Acme", without)[0].location, "Remote");
+    }
+
+    /// Lever sends epoch milliseconds. Everything downstream treats
+    /// posted_at as a display string, so a bare 13-digit number would
+    /// reach the UI unrendered.
+    #[test]
+    fn lever_renders_its_epoch_millis_as_a_date() {
+        let data: Vec<LeverJob> = parse(
+            r#"[{"text":"Backend Engineer","hostedUrl":"https://l/1","createdAt":1760000000000,
+                 "categories":{"location":"Remote"},"descriptionPlain":"plain"}]"#,
+        );
+        let j = &lever_jobs("Acme", data)[0];
+        assert_eq!(j.title, "Backend Engineer");
+        assert_eq!(j.posted_at.as_deref(), Some("2025-10-09"));
+        assert_eq!(j.description, "plain");
+    }
+
+    #[test]
+    fn lever_prefers_the_full_location_list_over_the_single_field() {
+        let data: Vec<LeverJob> = parse(
+            r#"[{"text":"X","hostedUrl":"u","categories":{"location":"NYC","allLocations":["NYC","Remote"]}}]"#,
+        );
+        assert_eq!(lever_jobs("Acme", data)[0].location, "NYC, Remote");
+    }
+
+    #[test]
+    fn smartrecruiters_assembles_its_four_part_location() {
+        assert_eq!(
+            smartrecruiters_location(Some(SrLocation {
+                city: Some("Dublin".into()),
+                region: Some("Leinster".into()),
+                country: Some("Ireland".into()),
+                remote: None,
+            })),
+            "Dublin, Leinster, Ireland"
+        );
+        assert_eq!(
+            smartrecruiters_location(Some(SrLocation {
+                city: None,
+                region: None,
+                country: None,
+                remote: Some(true),
+            })),
+            "Remote"
+        );
+        assert_eq!(smartrecruiters_location(None), "");
+    }
+
+    /// A posting with no usable identifier is skipped, not stored blank.
+    /// The URL is half the dedup key, so one empty string would make every
+    /// later url-less posting look like a repeat of the first.
+    #[test]
+    fn smartrecruiters_url_falls_back_and_then_gives_up() {
+        assert_eq!(
+            smartrecruiters_url("acme", "99", Some("https://apply".into()), None),
+            Some("https://apply".to_string())
+        );
+        assert_eq!(
+            smartrecruiters_url("acme", "99", None, Some("https://ref".into())),
+            Some("https://ref".to_string())
+        );
+        assert_eq!(
+            smartrecruiters_url("acme", "99", None, None),
+            Some("https://jobs.smartrecruiters.com/acme/99".to_string())
+        );
+        assert_eq!(
+            smartrecruiters_url("acme", "", Some(String::new()), None),
+            None
+        );
+    }
+
+    /// An empty board is a normal answer, not a failure.
+    #[test]
+    fn an_empty_board_yields_no_jobs_rather_than_an_error() {
+        assert!(greenhouse_jobs("Acme", parse::<GhResponse>(r#"{"jobs":[]}"#)).is_empty());
+        assert!(ashby_jobs("Acme", parse::<AshbyResponse>(r#"{}"#)).is_empty());
+        assert!(workable_jobs("Acme", parse::<WorkableResponse>(r#"{}"#)).is_empty());
+        assert!(lever_jobs("Acme", parse::<Vec<LeverJob>>("[]")).is_empty());
+    }
 }
